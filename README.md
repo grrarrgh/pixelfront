@@ -19,6 +19,19 @@ python main.py
 
 This produces a single self-contained `dist\Pixelfront.exe`.
 
+## Tests
+
+```powershell
+python -m unittest discover tests
+```
+
+`tests/test_mapgen.py` generates 60 maps and checks each one:
+
+- Every open tile is reachable, and nothing but cliff blocks movement.
+- No cliff stands on its own.
+- Every plateau has a ramp, and every ramp is a 3-wide cut square into a straight cliff wall.
+- Both halves of the map are the same.
+
 ## Logs
 
 Every run writes a log to `logs\YYYYMMDD_HHMMSS.log` (next to `Pixelfront.exe`, or in the project
@@ -75,6 +88,13 @@ Units are trained with the design that was current when you queued them, and loo
 - **Vehicle armour:** more plating, same size.
 - **Vehicle speed:** Fast = wheels, Normal = half-tracks, Slow = full tracks. Front wheels steer into turns.
 - **Markings:** medics carry red crosses on white patches, engineers yellow and grey shoulder patches.
+
+### High ground
+
+The desert has two levels. Plateaus rise out of the rocky rim around the map, edged by cliffs
+you can't climb. Each one is reached by one or two ramps. Units below can't see up onto a
+plateau, so they can't shoot anything up there unless a friendly unit on top spots it. Units on
+top see and shoot down as normal. Some derricks sit on high ground.
 
 ### Weapons and armour
 
@@ -157,12 +177,13 @@ Medics and engineers have to be touching whoever or whatever they heal, repair o
 | `pixelfront/units/` | One file per unit type (`rifleman.py`, `tank.py`, ...) with its stats, weapon tiers and special tiers. `registry.py` lists them; `unit.py` is the shared `Unit` behaviour (orders, movement, combat, suppression and retreating) |
 | `pixelfront/weapons.py` | Every weapon, the three weapon types, armour ranks, projectiles, and how firing, splash and suppression work |
 | `pixelfront/modules.py` | Loadout slots and tiers, and the stats/cost they produce |
-| `pixelfront/world.py` | Tile map and symmetric desert map generator |
+| `pixelfront/world.py` | Tile map (with ground levels) and the symmetric desert map generator: plateaus, cliffs, ramps |
+| `pixelfront/fog.py` | Vision (including high ground) and the player's fog of war |
+| `tests/` | Map generator tests |
 | `pixelfront/pathfinding.py` | A* on the tile grid |
 | `pixelfront/entities.py` | Entity base class, buildings (incl. bunker garrison fire), capture points |
 | `pixelfront/game.py` | Simulation: economy, capturing, combat, construction, win check, test range |
 | `pixelfront/ai.py` | Computer opponent |
-| `pixelfront/fog.py` | Fog of war |
 | `pixelfront/model3d.py` | Units and buildings as small 3D models (per loadout and pose) and the renderer that turns them into pixel art |
 | `pixelfront/sprites.py` | Unit frames per facing and animation, building images per construction stage (rendered on demand, cached), icons, terrain |
 | `pixelfront/render.py`, `hud.py`, `design.py` | Map view (incl. flags and garrison animations), control panel and build sidebar, design popup |

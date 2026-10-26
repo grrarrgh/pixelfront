@@ -2,6 +2,36 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.11.0 "High Ground" (2026-10-26)
+
+Cliffs that matter: plateaus with ramps, contoured rock, height-based vision and livelier idle units.
+
+### Added
+
+- **High ground**:
+  - The map now has two levels.
+  - Plateaus always grow out of the rocky rim around the map, so no cliff stands on its own.
+  - Each plateau is edged by impassable cliff and reached by one or two ramps.
+- **Ramps** are 3 tiles wide and cut square into a straight stretch of cliff wall. They're drawn as a slope with treads, wandering sides and a spill of sand at the foot.
+- **Height-based vision**:
+  - Units on low ground can't see onto a plateau, and can't target anything up there unless a friendly unit on top spots it.
+  - Units on high ground see and shoot down as normal.
+  - This applies to both sides.
+- **Contoured cliffs**:
+  - Cliff edges are drawn at quarter-tile detail with rounded, irregular outlines.
+  - South faces show rock strata and striations; other faces show sunlit rubble.
+  - Plateau tops have their own rock texture with a highlight lip, and cliffs cast shadows.
+  - High ground shows up on the minimap.
+- **Map generator tests** (`python -m unittest discover tests`) check 60 maps each for reachability, blocking terrain, lone cliffs, ramp alignment, ramps onto every plateau and symmetry.
+- **Idle animations**:
+  - Idle tanks and jeeps sweep their turrets to random bearings and pause.
+  - The fixed 155mm raises and lowers its barrel instead.
+  - Idle soldiers turn to look around every few seconds, and now and then check their weapon (medics and engineers go through their kit).
+
+### Changed
+
+- The generator rejects any map where some open ground can't be reached (it used to allow 2%). Low-ground pockets walled in by plateaus are filled in.
+
 ## 0.10.0 "Watchtower" (2026-10-26)
 
 A C&C-style build sidebar, a new Tower, instant foundations and a smaller designer.
