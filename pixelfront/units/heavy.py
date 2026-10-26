@@ -1,7 +1,7 @@
 """Heavy infantry: an armoured heavy-weapons team that kneels to fire."""
 
 UNIT = dict(
-    name="Heavy Infantry", cls="infantry", hotkey="h", desc="Armoured heavy weapons team.",
+    name="Heavy Infantry", cls="infantry", desc="Armoured heavy weapons team.",
     hp=80, armor=1, speed=32, sight=6,
     cost=110, time=12, supply=1, radius=4, height=13,
     kneels=True,   # must kneel before firing

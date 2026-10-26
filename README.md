@@ -32,13 +32,21 @@ Destroy every enemy building to win. Lose all of yours and it's over.
 - **Income** comes from **oil derricks** scattered across the desert. Park units next to one
   to capture it (more units capture faster, up to 3). An enemy-owned derrick has to be
   neutralized before you can take it. Each derrick pays +2 credits/s; each Command Center +1/s.
+- **Build menu** (right-hand side): by default it lists everything the Command Center offers:
+  every building, and Engineers. Select a Barracks or Vehicle Yard and it lists what that
+  factory trains instead. Click an entry or press its number (**1-9**). Click the Command Center
+  picture at the top to jump to your base.
+- **Placing a building** lays its foundation straight away (and pays for it). The closest idle
+  engineer walks over and builds it. If none is idle, the next engineer to finish their job
+  picks it up. Right-click a foundation with more engineers to speed it up. A site shows red if
+  it's within a tile of another building.
 - **Command Center** trains **Engineers**, who build, repair buildings and vehicles, and capture.
 - **Barracks** trains **Riflemen**, **Medics** (heal infantry they touch) and **Heavy Infantry** (armoured heavy weapons team).
 - **Vehicle Yard** builds **Jeeps** (fast, mounted weapon) and **Tanks** (armoured, big gun). Their weapons sit in turrets that traverse independently of the hull.
 
 ### Unit design
 
-Select a production building and press **D** to open the design screen. Each unit type has
+Select a production building and press **E** to open the design popup. Each unit type has
 three module slots, and every choice has a trade-off:
 
 | Slot | Light / Slow | Medium / Normal (default) | Heavy / Fast |
@@ -87,11 +95,16 @@ light, medium or heavy plating. The design screen lists each armour tier's damag
 Tank guns reload slowest of all. The Bushmaster fires fast 10-round bursts that wear a tank
 down slowly, but several of them together take one apart.
 
-### Bunkers
+### Bunkers and Towers
 
-Engineers can build Bunkers. Right-click one with infantry to man it (up to 4). Soldiers inside
-fire from it with 25% faster reloads and +10% damage and range, and slowly heal, while the bunker takes the hits.
-If it falls, the garrison is thrown clear.
+Right-click either with infantry to man it. Soldiers inside fire out with the structure's bonuses
+while it takes the hits. You can see them in the windows, scanning the area. If it falls, the
+garrison is thrown clear.
+
+| | Holds | Garrison bonus |
+| --- | --- | --- |
+| Bunker (2x2) | 4 | 25% faster reloads, +10% damage and range, slow healing |
+| Tower (1x1) | 2 | +35% range, and the tower sees much further while manned. No healing. |
 
 ### Suppression
 
@@ -106,7 +119,7 @@ Medics and engineers have to be touching whoever or whatever they heal, repair o
 ### Test range and motion test
 
 - **T** on the title screen: a sandbox with no AI, no fog, plenty of credits, a starter army, a
-  Command Center, Barracks and Vehicle Yard to train from (building and training are 10x faster than normal),
+  Command Center, Barracks, Vehicle Yard, Bunker and Tower (building and training are 10x faster than normal),
   and passive enemy targets of every type and loadout. **F5** respawns the targets.
 - **M** on the title screen: the sprite motion test. Every unit loops through turning, moving,
   attacking, pinned-down and dying animations. **1/2/3** cycle the Armor, Weapon and Speed tiers,
@@ -120,17 +133,17 @@ Medics and engineers have to be touching whoever or whatever they heal, repair o
 | Shift + click | Add/remove from selection |
 | Double click, Ctrl + click | Select all units of that type on screen |
 | Right click | Smart command: move, attack, capture a derrick, heal (medic), build/repair (engineer). With a building selected: set rally point |
-| `A` then click | Attack (click an enemy) or attack-move (click ground) |
-| `M` / `S` | Move / Stop |
-| Engineer: `R`, `C` / `B` / `Y` / `K` | Repair; build Command Center / Barracks / Vehicle Yard / Bunker (Shift+click to place several; other selected engineers help build) |
-| Bunker: `U` | Unload the garrison (right-click a bunker with infantry to man it) |
-| Command Center: `E` | Train Engineer |
-| Barracks: `R` / `M` / `H` | Train Rifleman / Medic / Heavy Infantry |
-| Yard: `J` / `T` | Build Jeep / Tank |
-| Factory: `D` | Unit design screen |
-| Click a queue slot | Cancel training (refunds) |
-| Ctrl + 1-9, 1-9 | Assign / recall control group (press twice to jump the camera) |
-| Arrow keys, screen edges, middle-drag, minimap | Move camera |
+| `1`-`9` | Build menu: place a building or train a unit (Shift+click places several) |
+| `Q` then click | Attack (click an enemy) or attack-move (click ground) |
+| `M` / `X` | Move / Stop |
+| Engineer: `R` | Repair |
+| Bunker / Tower: `U` | Unload the garrison (right-click one with infantry to man it) |
+| Factory: `E` | Unit design popup |
+| Building under construction: `X` | Cancel (refunds) |
+| Click a queue slot | Cancel training (refunds). Factories queue up to 15. |
+| Ctrl + 1-9, Shift + 1-9 | Assign / recall control group (recall twice to jump the camera) |
+| `W` `A` `S` `D`, arrow keys, screen edges, middle-drag, minimap | Move camera |
+| Command Center picture (top of the build menu) | Jump to your Command Center |
 | Space | Jump to your base |
 | F1 | Controls overlay |
 | F11 | Toggle fullscreen |
@@ -152,7 +165,7 @@ Medics and engineers have to be touching whoever or whatever they heal, repair o
 | `pixelfront/fog.py` | Fog of war |
 | `pixelfront/model3d.py` | Units and buildings as small 3D models (per loadout and pose) and the renderer that turns them into pixel art |
 | `pixelfront/sprites.py` | Unit frames per facing and animation, building images per construction stage (rendered on demand, cached), icons, terrain |
-| `pixelfront/render.py`, `hud.py`, `design.py` | Map view, control panel, design screen |
+| `pixelfront/render.py`, `hud.py`, `design.py` | Map view (incl. flags and garrison animations), control panel and build sidebar, design popup |
 | `pixelfront/motiontest.py` | Sprite motion test scene |
 | `pixelfront/controller.py` | Mouse/keyboard to orders |
 | `pixelfront/app.py` | Window, main loop, title/pause/design/game-over screens |

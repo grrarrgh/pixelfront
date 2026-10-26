@@ -286,7 +286,9 @@ def soldier(kind, light, lo, anim="idle", i=0):
     Returns (boxes, muzzle, fall, lift): render with those fall/lift values at INF_SCALE.
     """
     tc = team_set(light)
-    act ={"fire": "fire", "pfire": "fire", "kfire": "fire", "work": "work"}.get(anim)
+    act = {"fire": "fire", "pfire": "fire", "kfire": "fire", "work": "work"}.get(anim)
+    if anim == "check":   # weapon check: rifle raised and looked over; medics/engineers go through their kit
+        act = "work" if kind in ("medic", "engineer") else "fire"
     armor, weapon, speed = lo.get("armor", 1), lo.get("weapon", 1), lo.get("engine", 1)
     # The gun in their hands. Medics and engineers carry kit in the weapon slot instead (the
     # tier number picks the kit) and only draw their sidearm to fire.
@@ -339,6 +341,9 @@ def soldier(kind, light, lo, anim="idle", i=0):
             legs[s] = (0, 0, s * splay, -s * knee)
             arms[s] = (165, 0, -s * asplay, s * elbow)
 
+    if anim == "check":   # tilt the weapon up and back down to look it over
+        arms = {s: (sp + (14 if i else 4) * (1 if s == -1 else 0.6), ep - (16 if i else 0), a, b)
+                for s, (sp, ep, a, b) in arms.items()}
     _legs(add, tc, armor, speed, legs)
     upper_from = len(B)   # everything after the legs breathes in the idle animation
     _body(add, kind, tc, armor, weapon, speed, moving)
@@ -346,6 +351,10 @@ def soldier(kind, light, lo, anim="idle", i=0):
     W = []
     wadd = lambda *a, **k: W.append(Box(*a, **k))
     muzzle = _weapon(wadd, kind, gun, act, recoil)
+    if anim == "check" and gun:   # weapon tipped up, close to the face
+        tilt = ("pitch", -(18 if i else 8), (0, 0, 12))
+        W = [Box(b.pos, b.size, b.color, tuple(b.rot) + (tilt,), b.glow) for b in W]
+        muzzle = _rotate(muzzle, *tilt) if muzzle else muzzle
     if shield:   # ballistic shield on the left arm, with a vision slit
         wadd((3.6, 3.4, 10.6), (0.8, 5.0, 9.6), tc["plate"])
         wadd((3.65, 3.4, 15.5), (0.9, 5.2, 0.5), GUN)
@@ -380,6 +389,7 @@ def soldier(kind, light, lo, anim="idle", i=0):
 
 IDLE_BREATH = (0.0, 0.25, 0.45, 0.25)   # upper-body rise per idle frame
 IDLE_SHAKE = (0.0, 0.3)                 # vehicle body shake per idle frame, engine running
+IDLE_ELEV = (0, 3, 7, 11, 14, 11, 7, 3)  # fixed-gun barrel elevation per "idlegun" frame, degrees
 
 
 def _raised(boxes, dz):
@@ -676,15 +686,16 @@ def _running_gear(add, speed, phase, front, rear, y, z, h, wheel, wreck=False, s
 
 
 def tank(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False, turret=0.0, steer=0.0,
-         shake=0.0):
-    B, muzzle, gear = _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer)
+         shake=0.0, elev=0.0):
+    """elev = extra barrel elevation in degrees (the fixed 155mm's idle animation)."""
+    B, muzzle, gear = _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev)
     if shake:   # idling engine: the body rocks on its suspension, the running gear stays put
         B[gear:] = _raised(B[gear:], shake)
         muzzle = (muzzle[0], muzzle[1], muzzle[2] + shake)
     return B, muzzle
 
 
-def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
+def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_extra=0.0):
     tc = team_set(light)
     armor, speed = lo.get("armor", 1), lo.get("engine", 1)
     gun = weapon_of("tank", lo)
@@ -766,7 +777,7 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     gz = 13.4
     pivot = (6.6, 0, gz)
     # Barrel elevation: the 155mm sits raised like an artillery piece; wrecks droop.
-    elev = -10 if wreck else (14 if gun == "howitzer_155" else 0)
+    elev = -10 if wreck else (14 + elev_extra if gun == "howitzer_155" else 0)
     bar = [("pitch", elev, pivot)] if elev else []
     if gun == "bushmaster":     # Bushmaster II 30mm: slim barrel, muzzle brake, ammo feed box, coax
         tadd((6.8, 0, gz), (1.6, 2.6, 2.2), GUN_L)
@@ -1019,8 +1030,7 @@ def barracks(light):
         b(x + 2, 17, 3.7, 4, 3, 2.0, (176, 156, 108))
     for x in (-11, -3, 5):                                     # roof vents
         b(x, -9, 14.7, 5, 2, 1.0, GUN_L)
-    b(17, -16, 14.7, 0.8, 0.8, 12, GUN)                       # flag pole + team flag
-    b(19.8, -16, 23.5, 5, 0.4, 3, T)
+    # (The team flag on a pole is drawn and animated by render.draw_flag.)
     return B
 
 
@@ -1112,15 +1122,65 @@ def bunker(light, manned=False):
     b(0, 17.2, 7.0, 20, 0.4, 1.6, slit)
     for s in (1, -1):
         b(s * 18.2, -1, 7.0, 0.4, 14, 1.6, slit)
-    if manned:   # helmets of the garrison in the slits, and a barrel poking out
-        for e in (-6, 0, 6):
-            b(e, 16.4, 7.2, 3, 2, 1.4, T)
+    if manned:   # a barrel poking out (the garrison's heads are animated by render.draw_garrison)
         b(3, 19.0, 7.4, 1, 4, 0.8, GUN)
     b(10, -14, 13.8, 0.8, 0.8, 8, GUN)                          # radio mast
     return B
 
 
-BUILDING_MODELS = {"command": command_center, "barracks": barracks, "yard": vehicle_yard, "bunker": bunker}
+def tower(light, manned=False):
+    """A tall concrete guard tower on a 1x1 footprint: a tapering shaft with a steel door, a
+    wider observation cab with window slits on every side, a flat overhanging roof and a
+    searchlight. Manned towers show the garrison's helmets in the windows."""
+    tc = team_set(light)
+    T = tc["T"]
+    B = []
+    slit = (20, 20, 24)
+
+    def b(east, south, up, w, d, h, col, glow=False, rot=()):
+        _bbox(B, east, south, up * 0.8, w, d, h * 0.8, col, glow, rot)
+
+    b(0, 0, 0, 15, 15, 1.0, CONCRETE_D)                          # footing slab
+    # Shaft: stacked, slightly narrowing pours, with a darker seam between each.
+    for k, (w, z) in enumerate(((11.0, 1.0), (10.2, 6.0), (9.4, 11.0))):
+        b(0, 0, z, w, w, 5.0, CONCRETE if k % 2 == 0 else shade(CONCRETE, 0.96))
+        b(0, 0, z + 4.9, w + 0.2, w + 0.2, 0.3, CONCRETE_D)
+    b(0, 5.6, 1.0, 3.6, 0.3, 5.4, (70, 74, 82))                   # steel door
+    b(0, 5.75, 3.6, 0.5, 0.2, 0.5, GUN_L)                         # handle
+    b(0, 4.8, 9.0, 1.4, 0.3, 2.0, slit)                           # stairwell slit
+    b(0, 0, 16.0, 13, 13, 1.2, shade(CONCRETE, 1.05))              # cab floor overhang
+    # Observation cab: solid corners, window slits between.
+    b(0, 0, 17.2, 12.4, 12.4, 6.0, CONCRETE)
+    for s in (1, -1):
+        b(0, s * 6.25, 19.0, 8, 0.3, 2.2, slit)                   # front/back windows
+        b(s * 6.25, 0, 19.0, 0.3, 8, 2.2, slit)                   # side windows
+    b(0, 6.4, 17.6, 12, 0.3, 0.9, T)                               # team band under the windows
+    b(0, 0, 23.2, 14.4, 14.4, 1.0, shade(CONCRETE, 1.08))          # roof slab, overhanging
+    b(0, 0, 24.2, 9, 9, 0.5, CONCRETE_D)
+    b(4.4, -4.4, 24.7, 2.0, 2.0, 1.6, GUN)                         # searchlight housing
+    b(4.4, -3.3, 25.3, 1.4, 0.3, 0.9, (250, 246, 210), glow=True)  # lamp
+    b(-4.8, -4.8, 24.7, 0.6, 0.6, 5.0, GUN)                        # radio aerial
+    if manned:   # (heads in the window are animated by render.draw_garrison)
+        b(2.4, 7.4, 19.6, 0.7, 2.6, 0.6, GUN)                      # barrel through the slit
+    return B
+
+def footprint_to_screen(east, south, up):
+    """Screen offset from a building's ground centre of a point given in _bbox coordinates
+    (buildings are drawn at BUILD_FACING, scale 1)."""
+    return east, south - up * HEIGHT * COS_E
+
+
+# Where garrisoned soldiers' heads show: (east, south, up) in _bbox coordinates, one per seat,
+# along the front window slit. Matches the bunker()/tower() models above.
+_K2 = 2 / 3
+GARRISON_SEATS = {
+    "bunker": [(e * _K2, 17.2 * _K2, 7.0 * 0.8) for e in (-9, -3, 3, 9)],
+    "tower": [(e, 6.25, 19.2 * 0.8) for e in (-2.2, 2.2)],
+}
+
+
+BUILDING_MODELS = {"command": command_center, "barracks": barracks, "yard": vehicle_yard, "bunker": bunker,
+                   "tower": tower}
 
 
 def under_construction(boxes, progress):

@@ -2,6 +2,42 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.10.0 "Watchtower" (2026-10-26)
+
+A C&C-style build sidebar, a new Tower, instant foundations and a smaller designer.
+
+### Added
+
+- **Build sidebar** on the right of the map:
+  - A detailed picture of the Command Center sits at the top. Click it to jump to your Command Center.
+  - Below it is a numbered list. By default it shows everything the Command Center offers: every building, and Engineers.
+  - Select a Barracks or Vehicle Yard and the list shows what that factory trains, with queue counts and training progress.
+  - Press **1-9** to pick an entry.
+- **Instant foundations.** Placing a building lays its foundation (and pays for it) right away. The closest idle engineer then goes to build it. Unattended foundations are picked up by the next engineer to go idle.
+- **Tower**, a tall concrete guard tower on a single tile:
+  - Holds 2 infantry.
+  - The garrison fires at +35% range, and the tower's sight rises from 5 to 11 tiles while manned.
+  - Soldiers inside don't heal.
+  - It's in the build menu, and the test range has one.
+- **Garrison animations.** Bunkers and Towers show one head per soldier inside, each scanning the surroundings.
+- **Waving flags** on every building, and on derricks.
+- **Bullet spread.** Rounds fan out a little, and their dashed trails drift slightly instead of running dead straight.
+
+### Changed
+
+- **Controls**:
+  - **WASD** scrolls the camera (as well as the arrow keys).
+  - Attack is now **Q**, Stop **X**, and Design **E**.
+  - Control groups are assigned with **Ctrl + 1-9** (unchanged) and recalled with **Shift + 1-9**.
+  - The old letter hotkeys for building and training are gone; use the numbered sidebar instead.
+- The radar in the top-right corner is gone. The minimap stays at the bottom left.
+- The unit designer is now a popup about half the size of the old full-screen panel. Every number is still shown at the same size.
+- Factories can queue up to 15 units (was 5).
+
+### Fixed
+
+- Units inside a Bunker or Tower can no longer be targeted. Medics used to keep "healing" a soldier who had gone inside, and enemies could keep shooting at them.
+
 ## 0.9.0 "Hit the Dirt" (2026-10-26)
 
 A large refactor, plus weapon types, armour ranks and smarter suppression. Also a gentler AI and freer building placement.

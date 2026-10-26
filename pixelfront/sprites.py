@@ -11,7 +11,7 @@ from . import model3d as m3
 from .config import TILE, TEAM_COLORS, PLAYER, ENEMY, KNEEL_TIME, STEER_MAX
 from .units import UNITS
 from .modules import default_loadout
-from .world import SAND, DUNE, ROCK, CLIFF
+from .world import SAND, DUNE, ROCK, CLIFF, RAMP, HIGH
 
 K = (20, 20, 26)
 GOLD = (248, 208, 72)
@@ -62,8 +62,8 @@ FACINGS = {"infantry": 8, "vehicle": 16}
 
 # Animation -> frame count. Infantry "prone"/"pfire" are the pinned-down crawl and prone firing.
 FRAMES = {
-    "infantry": dict(idle=4, walk=4, fire=2, work=2, prone=2, pfire=2, kneel=2, kfire=2, die=4),
-    "vehicle": dict(idle=2, walk=3, fire=2, die=1),
+    "infantry": dict(idle=4, walk=4, fire=2, work=2, prone=2, pfire=2, kneel=2, kfire=2, die=4, check=2),
+    "vehicle": dict(idle=2, walk=3, fire=2, die=1, idlegun=len(m3.IDLE_ELEV)),
 }
 DEATH_STEPS = (0.08, 0.18, 0.3)   # seconds at which each infantry death frame ends
 WALK_RATE = {"infantry": 8.0, "vehicle": 10.0}  # frames per second at the unit's base speed
@@ -85,10 +85,15 @@ def unit_anim(u):
         return ("fire" if u.order == "attack" else "work"), int(firing)
     if u.moving:
         return "walk", int(u.anim * WALK_RATE["vehicle" if u.is_vehicle else "infantry"])
-    # Idle: soldiers breathe slowly, vehicles shake with the engine running. The unit id
-    # offsets the cycle so a squad doesn't breathe in unison.
+    # Idle: soldiers breathe slowly (and now and then check their weapon), vehicles shake with
+    # the engine running; a fixed gun slowly raises and lowers its barrel instead of turning a
+    # turret. The unit id offsets the cycle so a squad doesn't breathe in unison.
     if u.is_vehicle:
+        if u.armed and not u.has_turret:
+            return "idlegun", int((u.idle_t + u.id * 0.7) * 2.0) % len(m3.IDLE_ELEV)
         return "idle", int(u.idle_t * 10) % 2
+    if u.check_t > 0:
+        return "check", int(u.check_t * 2.5) % 2
     return "idle", int((u.idle_t + u.id * 0.37) * 2.5) % 4
 
 
@@ -113,6 +118,9 @@ def _render_unit(kind, light, lo, anim, i, facing, turret=0.0, steer=0.0):
         elif anim == "die":
             b, _ = build(light, lo, wreck=True, turret=turret)
             darken = 0.4
+        elif anim == "idlegun":   # fixed gun nodding its barrel up and down
+            b, _ = build(light, lo, turret=turret, steer=steer, shake=m3.IDLE_SHAKE[i % len(m3.IDLE_SHAKE)],
+                         elev=m3.IDLE_ELEV[i])
         else:
             b, _ = build(light, lo, turret=turret, steer=steer, shake=m3.IDLE_SHAKE[i % len(m3.IDLE_SHAKE)])
         return m3.render(b, facing, darken=darken)
@@ -195,12 +203,13 @@ def muzzle_offset(kind, loadout, angle, prone=False, turret=0.0, kneel=False):
 BUILD_STAGES = 6   # construction is shown in this many height steps
 
 
-def render_building(kind, team, stage=BUILD_STAGES, manned=False):
+def render_building(kind, team, stage=BUILD_STAGES, manned=False, scale=1.0):
     model = m3.BUILDING_MODELS[kind]
-    boxes = model(TEAM_COLORS[team][0], manned) if kind == "bunker" else model(TEAM_COLORS[team][0])
+    garrisoned = kind in ("bunker", "tower")   # models that show their garrison
+    boxes = model(TEAM_COLORS[team][0], manned) if garrisoned else model(TEAM_COLORS[team][0])
     if stage < BUILD_STAGES:
         boxes = m3.under_construction(boxes, (stage + 1) / (BUILD_STAGES + 1))
-    return m3.render(boxes, m3.BUILD_FACING, ss=2, texture=0.07)
+    return m3.render(boxes, m3.BUILD_FACING, scale=scale, ss=2, texture=0.07)
 
 
 METAL, METAL_D, METAL_L = (150, 156, 166), (96, 102, 114), (198, 204, 212)
@@ -286,7 +295,79 @@ def fit(surf, size):
 
 # ---- terrain -----------------------------------------------------------------
 
-TERRAIN_COLORS = {SAND: (220, 186, 124), DUNE: (204, 166, 106), ROCK: (170, 146, 110), CLIFF: (130, 80, 50)}
+TERRAIN_COLORS = {SAND: (220, 186, 124), DUNE: (204, 166, 106), ROCK: (170, 146, 110), CLIFF: (130, 80, 50),
+                  RAMP: (190, 154, 108)}
+HIGH_COLOR = (214, 162, 104)     # plateau tops on the minimap
+Q = 4                            # cliff outlines are drawn on a grid of Q x Q px cells
+
+
+def _field(world, pick, gw, gh):
+    """A tile mask (pick(i) -> bool) blurred up to the cell grid: bytes, one 0-255 value per cell."""
+    small = pygame.Surface((world.w, world.h))
+    for i in range(world.w * world.h):
+        if pick(i):
+            small.set_at((i % world.w, i // world.w), (255, 255, 255))
+    return pygame.image.tobytes(pygame.transform.smoothscale(small, (gw, gh)), "RGB")[::3]
+
+
+def _ramp_groups(world):
+    """Each ramp as (its tiles, (dx, dy) uphill)."""
+    w, h = world.w, world.h
+    seen = set()
+    out = []
+    for i in range(w * h):
+        p = (i % w, i // w)
+        if world.tiles[i] != RAMP or p in seen:
+            continue
+        group, todo = [], [p]
+        seen.add(p)
+        while todo:
+            x, y = todo.pop()
+            group.append((x, y))
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                q = (x + dx, y + dy)
+                if q not in seen and world.in_bounds(*q) and world.tile(*q) == RAMP:
+                    seen.add(q)
+                    todo.append(q)
+        out.append((group, world.ramp_dir(*p)))
+    return out
+
+
+def _shape_ramp(group, dx, dy, cls, along, noise, gw, gh, classes):
+    """Mark one ramp's cells. Its sides wander like the cliff edge, narrowing a little towards
+    the top, and it spills out onto the ground at its foot in a rounded apron."""
+    LOW_C, FACE_C, TOP_C, RAMP_C = classes
+    n = len(group)
+    mx = sum(x for x, _ in group) / n * TILE + TILE / 2      # ramp centre, px
+    my = sum(y for _, y in group) / n * TILE + TILE / 2
+    hw = n * TILE / 2                                          # half width across the slope, px
+    sx, sy = -dy, dx                                           # across the slope
+    x0, y0 = (min(x for x, _ in group) - 2) * TILE, (min(y for _, y in group) - 2) * TILE
+    x1, y1 = (max(x for x, _ in group) + 3) * TILE, (max(y for _, y in group) + 3) * TILE
+    for cy in range(max(0, y0 // Q), min(gh, y1 // Q)):
+        for cx in range(max(0, x0 // Q), min(gw, x1 // Q)):
+            c = cy * gw + cx
+            px, py = cx * Q + Q / 2 - mx, cy * Q + Q / 2 - my
+            s = px * dx + py * dy        # along the slope: -8 at the foot edge, +8 at the top edge
+            across = px * sx + py * sy
+            t = abs(across)              # distance from the centre line
+            side = 1 if across > 0 else 2   # each side wanders on its own
+            wob = ((noise[c] - 128) / 128 * 2.0
+                   + 2.6 * math.sin(s * 0.55 + mx * 0.37 * side) + 1.6 * math.sin(s * 1.3 + my * 0.29 * side))
+            if -TILE / 2 <= s <= TILE / 2:                       # the cut through the cliff
+                limit = hw - 1.5 - (s + TILE / 2) * 0.3 + wob   # narrowing towards the top
+                if t <= limit:
+                    cls[c] = RAMP_C
+                    along[c] = (s + TILE / 2) / TILE
+                elif t <= hw + TILE * 0.6 and cls[c] != TOP_C:
+                    cls[c] = FACE_C                              # flanking wall
+            elif -TILE / 2 - 9 <= s < -TILE / 2:                 # the apron at the foot
+                reach = 9 * (1 - min(1.0, t / (hw + 4)) ** 2) + wob
+                if s >= -TILE / 2 - reach and t <= hw + 2 + wob and cls[c] == LOW_C:
+                    cls[c] = RAMP_C
+                    along[c] = 0.0
+            elif TILE / 2 < s <= TILE / 2 + 4 and t <= hw - 2 + wob:
+                cls[c] = TOP_C                                   # clean lip at the top
 
 
 def render_terrain(world, seed=1):
@@ -295,35 +376,36 @@ def render_terrain(world, seed=1):
     sand, sand_d, sand_l = (220, 186, 124), (204, 168, 108), (234, 204, 146)
     dune, dune_d = (208, 170, 108), (184, 144, 88)
     rock, rock_d, rock_l = (176, 150, 112), (150, 126, 92), (198, 174, 136)
-    top, top_d, top_l = (180, 116, 72), (160, 100, 60), (204, 140, 92)
-    wall, wall_d = (122, 74, 44), (98, 58, 34)
+    mesa, mesa_d, mesa_l = (212, 162, 104), (192, 142, 88), (230, 186, 128)    # plateau tops
+    mesa_dune = (200, 150, 94)
+    walls = [(156, 98, 60), (138, 84, 50), (120, 72, 43), (104, 62, 37), (92, 54, 32)]
+    slope, slope_d, slope_l = (170, 116, 76), (146, 98, 62), (192, 138, 94)
+    lip, rim_line, base_line = (238, 196, 140), (150, 102, 64), (72, 44, 28)
+    w, h = world.w, world.h
 
-    def cliff(x, y):
-        return world.in_bounds(x, y) and world.tile(x, y) == CLIFF
-
-    def speckle(x, y, base, dark, light, n):
-        pygame.draw.rect(surf, base, (x, y, TILE, TILE))
+    def speckle(x, y, base, dark, light, n, size=TILE):
+        pygame.draw.rect(surf, base, (x, y, size, size))
         for _ in range(n):
-            surf.set_at((x + rng.randrange(TILE), y + rng.randrange(TILE)), rng.choice((dark, dark, light)))
+            surf.set_at((x + rng.randrange(size), y + rng.randrange(size)), rng.choice((dark, dark, light)))
 
-    for ty in range(world.h):
-        for tx in range(world.w):
+    # 1. Ground texture per tile: desert floor below, warmer mesa rock on the plateaus.
+    for ty in range(h):
+        for tx in range(w):
             t = world.tile(tx, ty)
             x, y = tx * TILE, ty * TILE
-            if t == CLIFF:
-                speckle(x, y, top, top_d, top_l, 14)
-                if not cliff(tx, ty - 1):
-                    pygame.draw.line(surf, top_l, (x, y), (x + TILE - 1, y))
-                if not cliff(tx - 1, ty):
-                    pygame.draw.line(surf, wall, (x, y), (x, y + TILE - 1))
-                if not cliff(tx + 1, ty):
-                    pygame.draw.line(surf, wall, (x + TILE - 1, y), (x + TILE - 1, y + TILE - 1))
-                if not cliff(tx, ty + 1):
-                    pygame.draw.rect(surf, wall, (x, y + 9, TILE, 7))
-                    for sx in range(x + rng.randrange(3), x + TILE, 3):
-                        pygame.draw.line(surf, wall_d, (sx, y + 10), (sx, y + 14))
-                    pygame.draw.line(surf, top_d, (x, y + 9), (x + TILE - 1, y + 9))
-                    pygame.draw.line(surf, (70, 42, 28), (x, y + 15), (x + TILE - 1, y + 15))
+            top = world.level(tx, ty) == HIGH and t != CLIFF
+            if top:
+                if t == DUNE:
+                    pygame.draw.rect(surf, mesa_dune, (x, y, TILE, TILE))
+                    for ry in range(y + rng.randrange(4), y + TILE, 5):
+                        ox = rng.randrange(-3, 3)
+                        pygame.draw.line(surf, mesa_d, (x + 2 + ox, ry), (x + 9 + ox, ry + 1))
+                else:
+                    speckle(x, y, mesa, mesa_d, mesa_l, 14)
+                    if rng.random() < 0.06:   # loose boulders
+                        px, py = x + rng.randrange(2, 12), y + rng.randrange(2, 12)
+                        pygame.draw.rect(surf, mesa_d, (px, py, 3, 2))
+                        surf.set_at((px, py), mesa_l)
                 continue
             if t == DUNE:
                 pygame.draw.rect(surf, dune, (x, y, TILE, TILE))
@@ -335,21 +417,110 @@ def render_terrain(world, seed=1):
             else:
                 speckle(x, y, sand, sand_d, sand_l, 10)
                 r = rng.random()
-                if r < 0.04:
+                if t == SAND and r < 0.04:
                     px, py = x + rng.randrange(2, 12), y + rng.randrange(2, 12)
                     pygame.draw.rect(surf, (150, 126, 92), (px, py, 3, 2))
                     surf.set_at((px, py), (190, 166, 128))
-                elif r < 0.05:
+                elif t == SAND and r < 0.05:
                     px, py = x + rng.randrange(4, 11), y + rng.randrange(3, 8)
                     green, green_d = (96, 140, 70), (60, 98, 50)
                     pygame.draw.rect(surf, green_d, (px, py, 2, 7))
                     pygame.draw.rect(surf, green, (px, py, 1, 6))
                     pygame.draw.rect(surf, green_d, (px - 2, py + 2, 2, 1))
                     pygame.draw.rect(surf, green_d, (px - 2, py, 1, 2))
-            if cliff(tx, ty - 1):
-                shadow = pygame.Surface((TILE, 4), pygame.SRCALPHA)
-                shadow.fill((60, 30, 10, 50))
-                surf.blit(shadow, (x, y))
+
+    # 2. Cliff outlines: blur the high-ground and plateau-top masks up to quarter tiles and
+    #    wobble them with smooth noise, so edges come out rounded and irregular, not square.
+    gw, gh = w * TILE // Q, h * TILE // Q
+    tiles, height = world.tiles, world.height
+    f_high = _field(world, lambda i: height[i] == HIGH, gw, gh)
+    f_top = _field(world, lambda i: height[i] == HIGH and tiles[i] != CLIFF, gw, gh)
+    noise = pygame.Surface((w // 2 + 1, h // 2 + 1))
+    for y in range(noise.get_height()):
+        for x in range(noise.get_width()):
+            v = rng.randrange(256)
+            noise.set_at((x, y), (v, v, v))
+    f_noise = pygame.image.tobytes(pygame.transform.smoothscale(noise, (gw, gh)), "RGB")[::3]
+    LOW_C, FACE_C, TOP_C, RAMP_C = 0, 1, 2, 3
+    cls = bytearray(gw * gh)
+    for c in range(gw * gh):
+        n = (f_noise[c] - 128) * 0.45
+        if f_top[c] + n > 128:
+            cls[c] = TOP_C
+        elif f_high[c] + n * 0.8 > 120:
+            cls[c] = FACE_C
+    ramp_along = {}   # cell -> 0 (foot) .. 1 (top), for shading the slope
+    for group, (dx, dy) in _ramp_groups(world):
+        _shape_ramp(group, dx, dy, cls, ramp_along, f_noise, gw, gh, (LOW_C, FACE_C, TOP_C, RAMP_C))
+    ramp = bytearray(1 if c == RAMP_C else 0 for c in cls)
+
+    def at(cx, cy):
+        return cls[cy * gw + cx] if 0 <= cx < gw and 0 <= cy < gh else FACE_C
+
+    stripe = [rng.randrange(3) for _ in range(gw)]
+    for cy in range(gh):
+        for cx in range(gw):
+            c = cls[cy * gw + cx]
+            px, py = cx * Q, cy * Q
+            ti = (py // TILE) * w + px // TILE
+            base_top = height[ti] == HIGH and tiles[ti] != CLIFF
+            if c == TOP_C and not base_top:
+                speckle(px, py, mesa, mesa_d, mesa_l, 2, Q)
+            elif c == LOW_C and base_top:
+                speckle(px, py, sand, sand_d, sand_l, 2, Q)
+            elif c == RAMP_C:
+                f = ramp_along[cy * gw + cx]
+                col = tuple(int(a + (b - a) * f) for a, b in zip((182, 142, 96), mesa_l))
+                pygame.draw.rect(surf, col, (px, py, Q, Q))
+                if int(f * 12) % 2 == 0:   # treads worn across the slope
+                    dark = tuple(int(v * 0.92) for v in col)
+                    pygame.draw.line(surf, dark, (px, py + Q // 2), (px + Q - 1, py + Q // 2))
+                if rng.random() < 0.5:
+                    surf.set_at((px + rng.randrange(Q), py + rng.randrange(Q)), (156, 118, 80))
+                continue
+            elif c == FACE_C:
+                depth = next((d for d in range(1, 6) if at(cx, cy - d) == TOP_C), 0)
+                if depth:   # south-facing wall, seen from the camera: darker the further down
+                    col = walls[min(depth - 1, len(walls) - 1)]
+                    pygame.draw.rect(surf, col, (px, py, Q, Q))
+                    if (cx + stripe[cx]) % 3 == 0:   # vertical striations
+                        pygame.draw.line(surf, walls[min(depth, len(walls) - 1)], (px + 1, py), (px + 1, py + Q - 1))
+                    if depth == 2:                    # a stratum line part-way down
+                        pygame.draw.line(surf, walls[0], (px, py), (px + Q - 1, py))
+                else:       # faces turned away from the camera: a sunlit rubble slope
+                    speckle(px, py, slope, slope_d, slope_l, 3, Q)
+
+    # 3. Contour lines, lips and shadows.
+    shade = pygame.Surface((Q, Q), pygame.SRCALPHA)
+    shade.fill((70, 34, 10, 70))
+    for cy in range(gh):
+        for cx in range(gw):
+            c = cls[cy * gw + cx]
+            px, py = cx * Q, cy * Q
+            if c == TOP_C:
+                if at(cx, cy + 1) == FACE_C:      # bright lip where the top drops away
+                    pygame.draw.line(surf, lip, (px, py + Q - 1), (px + Q - 1, py + Q - 1))
+                if at(cx, cy - 1) != TOP_C:       # contour line around the plateau
+                    pygame.draw.line(surf, rim_line, (px, py), (px + Q - 1, py))
+                if at(cx - 1, cy) != TOP_C:
+                    pygame.draw.line(surf, rim_line, (px, py), (px, py + Q - 1))
+                if at(cx + 1, cy) == FACE_C:
+                    pygame.draw.line(surf, rim_line, (px + Q - 1, py), (px + Q - 1, py + Q - 1))
+            elif c == FACE_C:
+                if at(cx, cy + 1) == LOW_C:
+                    pygame.draw.line(surf, base_line, (px, py + Q - 1), (px + Q - 1, py + Q - 1))
+            elif c == RAMP_C:   # dark cut where the ramp meets the cliff wall either side
+                for nx, ny, a, b in ((cx - 1, cy, (px, py), (px, py + Q - 1)),
+                                     (cx + 1, cy, (px + Q - 1, py), (px + Q - 1, py + Q - 1)),
+                                     (cx, cy - 1, (px, py), (px + Q - 1, py)),
+                                     (cx, cy + 1, (px, py + Q - 1), (px + Q - 1, py + Q - 1))):
+                    if at(nx, ny) == FACE_C:
+                        pygame.draw.line(surf, base_line, a, b)
+            elif c == LOW_C and not ramp[cy * gw + cx]:
+                # Shadow cast down and to the right (light from the upper left).
+                if at(cx, cy - 1) != LOW_C or at(cx - 1, cy) != LOW_C or at(cx - 1, cy - 1) != LOW_C:
+                    surf.blit(shade, (px, py))
+
     return surf
 
 
@@ -357,7 +528,9 @@ def render_minimap(world):
     surf = pygame.Surface((world.w, world.h))
     for ty in range(world.h):
         for tx in range(world.w):
-            surf.set_at((tx, ty), TERRAIN_COLORS[world.tile(tx, ty)])
+            t = world.tile(tx, ty)
+            col = HIGH_COLOR if world.level(tx, ty) == HIGH and t != CLIFF else TERRAIN_COLORS[t]
+            surf.set_at((tx, ty), col)
     return surf
 
 
@@ -424,6 +597,16 @@ class Sprites:
         if got is None:
             got = self._flashes[key] = silhouette(self.building(kind, team)[0])
         return got
+
+    def building_portrait(self, kind, team, width):
+        """A building re-rendered at a larger scale (real detail, not an upscale) to fit `width`."""
+        key = ("hq", kind, team, width)
+        p = self._portraits.get(key)
+        if p is None:
+            base = self.building(kind, team)[0].get_width()
+            img = render_building(kind, team, scale=width / base)[0]
+            p = self._portraits[key] = img
+        return p
 
     def entity_image(self, e):
         if e.is_unit:

@@ -3,12 +3,13 @@ import logging
 
 import pygame
 
-from .config import (SCREEN_W, SCREEN_H, VIEW_H, TILE, MAP_W, MAP_H, PLAYER, NEUTRAL, BUILDINGS,
+from .config import (SCREEN_W, SCREEN_H, VIEW_W, VIEW_H, TILE, MAP_W, MAP_H, PLAYER, NEUTRAL, BUILDINGS,
                      CAMERA_SPEED, EDGE_SCROLL)
 from .modules import loadout_cost, loadout_summary, loadout_time
 from .units import UNITS
 
 TARGET_MODES = ("move", "attack", "repair")
+BUILDABLE = ("command", "barracks", "yard", "bunker", "tower")   # what the Command Center's menu lays down
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class Controller:
         self.place_kind = None
         self.drag_start = None    # world coords
         self.dragging = False
-        self.minimap_drag = None   # the minimap/radar rect being dragged across, if any
+        self.minimap_drag = None   # True while dragging across the minimap
         self.pan = None
         self.groups = {}
         self.last_click = (0, None)
@@ -37,12 +38,12 @@ class Controller:
     # ---- camera -----------------------------------------------------------
 
     def center_on(self, x, y):
-        self.cam_x = x - SCREEN_W / 2
+        self.cam_x = x - VIEW_W / 2
         self.cam_y = y - VIEW_H / 2
         self.clamp()
 
     def clamp(self):
-        self.cam_x = max(0.0, min(self.cam_x, MAP_W * TILE - SCREEN_W))
+        self.cam_x = max(0.0, min(self.cam_x, MAP_W * TILE - VIEW_W))
         self.cam_y = max(0.0, min(self.cam_y, MAP_H * TILE - VIEW_H))
 
     def to_world(self, pos):
@@ -54,8 +55,8 @@ class Controller:
 
     def update(self, dt):
         keys = pygame.key.get_pressed()
-        dx = keys[pygame.K_RIGHT] - keys[pygame.K_LEFT]
-        dy = keys[pygame.K_DOWN] - keys[pygame.K_UP]
+        dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
+        dy = (keys[pygame.K_DOWN] or keys[pygame.K_s]) - (keys[pygame.K_UP] or keys[pygame.K_w])
         if pygame.mouse.get_focused() and not self.pan and not self.minimap_drag and not self.dragging:
             mx, my = pygame.mouse.get_pos()
             if mx <= EDGE_SCROLL:
@@ -74,7 +75,7 @@ class Controller:
         for m in self.markers:
             m[2] += dt
         self.markers = [m for m in self.markers if m[2] < 0.5]
-        if self.mode and not self.own_units():
+        if self.mode in TARGET_MODES and not self.own_units():
             self.mode = None
 
     # ---- selection helpers ----------------------------------------------------
@@ -112,38 +113,81 @@ class Controller:
         if units:
             cmds = [dict(id="move", key="m", icon="move", title="Move",
                          desc="Park next to a derrick to capture it."),
-                    dict(id="stop", key="s", icon="stop", title="Stop")]
+                    dict(id="stop", key="x", icon="stop", title="Stop")]
             if any(u.armed for u in units):
-                cmds.append(dict(id="attack", key="a", icon="attack", title="Attack",
+                cmds.append(dict(id="attack", key="q", icon="attack", title="Attack",
                                  desc="Click an enemy, or ground to attack-move."))
             if all(u.kind == "engineer" for u in units):
                 cmds.append(dict(id="repair", key="r", icon="repair", title="Repair",
                                  desc="Fix a building or vehicle."))
-                speed = self.game.build_speed
-                for kind in ("command", "barracks", "yard", "bunker"):
-                    st = BUILDINGS[kind]
-                    cmds.append(dict(id="build:" + kind, key=st["hotkey"], icon="bld:" + kind,
-                                     title="Build " + st["name"], cost=st["cost"], desc=st["desc"],
-                                     time=st["time"] / speed, time_note="with one engineer"))
             return cmds
         b = sel[0]
         if b.is_building:
             if not b.complete:
                 return [dict(id="cancel", key="x", icon="cancel", title="Cancel", desc="Refunds the full cost.")]
-            designs = self.game.teams[PLAYER].designs
-            speed = self.game.build_speed
-            cmds = [dict(id="train:" + k, key=UNITS[k]["hotkey"], unit=k, title="Train " + UNITS[k]["name"],
-                         cost=loadout_cost(k, designs[k]), supply=UNITS[k]["supply"], desc=UNITS[k]["desc"],
-                         loadout=loadout_summary(k, designs[k]), time=loadout_time(k, designs[k]) / speed)
-                    for k in b.stats["trains"]]
-            if cmds:
-                cmds.append(dict(id="design", key="d", icon="design", title="Design units",
+            cmds = []
+            if b.stats["trains"]:
+                cmds.append(dict(id="design", key="e", icon="design", title="Design units",
                                  desc="Choose the armor, weapons and speed of what this trains."))
             if b.capacity and b.occupants:
                 cmds.append(dict(id="unload", key="u", icon="move", title="Unload",
                                  desc=f"Everyone out ({len(b.occupants)}/{b.capacity} inside)."))
             return cmds
         return []
+
+    # ---- sidebar build menu ------------------------------------------------------
+
+    def menu_source(self):
+        """The selected factory whose options the sidebar lists, or None for the Command
+        Center's default menu."""
+        return next((b for b in self.own() if b.is_building and b.complete and b.stats["trains"]), None)
+
+    def menu_title(self):
+        src = self.menu_source()
+        return src.name if src else BUILDINGS["command"]["name"]
+
+    def build_menu(self):
+        """Sidebar entries, numbered 1-9. The Command Center (also the default when no factory
+        is selected) lays down buildings and trains engineers; other factories train their units."""
+        g = self.game
+        src = self.menu_source()
+        speed = g.build_speed
+        designs = g.teams[PLAYER].designs
+        items = []
+        if src is None or src.kind == "command":
+            for kind in BUILDABLE:
+                st = BUILDINGS[kind]
+                items.append(dict(id="build:" + kind, icon="bld:" + kind, name=st["name"],
+                                  title="Build " + st["name"], cost=st["cost"], desc=st["desc"],
+                                  time=st["time"] / speed, time_note="with one engineer"))
+            trains = BUILDINGS["command"]["trains"]
+        else:
+            trains = src.stats["trains"]
+        for k in trains:
+            items.append(dict(id="train:" + k, unit=k, name=UNITS[k]["name"], title="Train " + UNITS[k]["name"],
+                              cost=loadout_cost(k, designs[k]), supply=UNITS[k]["supply"], desc=UNITS[k]["desc"],
+                              loadout=loadout_summary(k, designs[k]), time=loadout_time(k, designs[k]) / speed))
+        items = items[:9]
+        for i, it in enumerate(items):
+            it["key"] = str(i + 1)
+        return items
+
+    def factories_for(self, kind):
+        """Where a unit can be trained: the selected factories if any can, else all of them."""
+        own = [b for b in self.game.buildings if b.team == PLAYER and b.complete and kind in b.stats["trains"]]
+        picked = [b for b in own if b in self.selection]
+        return picked or own
+
+    def jump_to_command_center(self):
+        g = self.game
+        halls = [b for b in g.buildings if b.team == PLAYER and b.kind == "command"]
+        if not halls:
+            g.notify(PLAYER, "No Command Center")
+            return
+        # Cycle through them if there are several.
+        i = (halls.index(self.selection[0]) + 1) % len(halls) if self.selection and self.selection[0] in halls else 0
+        self.center_on(halls[i].x, halls[i].y)
+        self.selection = [halls[i]]
 
     def execute(self, cmd):
         """Run a command-card command. Returns "design" when the design screen should open."""
@@ -165,9 +209,12 @@ class Controller:
                 self.place_kind = kind
         elif cid.startswith("train:"):
             kind = cid[6:]
-            halls = [b for b in self.own() if b.is_building and b.complete and kind in b.stats["trains"]]
+            halls = self.factories_for(kind)
             if halls:
                 g.train(min(halls, key=lambda b: len(b.queue)), kind)
+            else:
+                trainer = next(BUILDINGS[k]["name"] for k in BUILDINGS if kind in BUILDINGS[k]["trains"])
+                g.notify(PLAYER, f"Needs a {trainer}")
         elif cid == "cancel":
             for b in self.own():
                 if b.is_building:
@@ -185,7 +232,7 @@ class Controller:
         if ev.type == pygame.MOUSEMOTION:
             self.mouse = ev.pos
             if self.minimap_drag:
-                self.center_on(*self.hud.minimap_to_world(ev.pos, self.minimap_drag))
+                self.center_on(*self.hud.minimap_to_world(ev.pos))
             if self.pan:
                 self.cam_x -= ev.pos[0] - self.pan[0]
                 self.cam_y -= ev.pos[1] - self.pan[1]
@@ -216,18 +263,29 @@ class Controller:
         return None
 
     def map_at(self, pos):
-        """The minimap or radar rect under the cursor, if any."""
-        return next((r for r in (self.hud.minimap_rect, self.hud.radar_rect) if r.collidepoint(pos)), None)
+        """True when the cursor is over the minimap."""
+        return self.hud.minimap_rect.collidepoint(pos)
+
+    def in_sidebar(self, pos):
+        return pos[0] >= VIEW_W and pos[1] < VIEW_H
 
     def left_down(self, pos, shift):
         g = self.game
-        rect = self.map_at(pos)
-        if rect:
+        if self.map_at(pos):
             if self.mode in TARGET_MODES:
-                self.target_command(*self.hud.minimap_to_world(pos, rect), None, shift)
+                self.target_command(*self.hud.minimap_to_world(pos), None, shift)
             else:
-                self.minimap_drag = rect
-                self.center_on(*self.hud.minimap_to_world(pos, rect))
+                self.minimap_drag = True
+                self.center_on(*self.hud.minimap_to_world(pos))
+            return None
+        if self.in_sidebar(pos):
+            if self.hud.portrait_rect.collidepoint(pos):
+                self.jump_to_command_center()
+                return None
+            items = self.build_menu()
+            i = self.hud.menu_item_at(pos, len(items))
+            if i is not None:
+                return self.execute(items[i])
             return None
         if pos[1] >= VIEW_H:
             cmds = self.commands()
@@ -259,11 +317,10 @@ class Controller:
         if self.mode:
             self.mode = None
             return
-        rect = self.map_at(pos)
-        if rect:
-            self.smart_command(*self.hud.minimap_to_world(pos, rect), None)
+        if self.map_at(pos):
+            self.smart_command(*self.hud.minimap_to_world(pos), None)
             return
-        if pos[1] >= VIEW_H:
+        if pos[1] >= VIEW_H or self.in_sidebar(pos):
             return
         wx, wy = self.to_world(pos)
         self.smart_command(wx, wy, self.pick(wx, wy))
@@ -302,7 +359,7 @@ class Controller:
             if double or ctrl:
                 l, t = self.cam_x, self.cam_y
                 self.selection = [u for u in g.units if u.team == PLAYER and u.kind == e.kind
-                                  and l <= u.x <= l + SCREEN_W and t <= u.y <= t + VIEW_H]
+                                  and l <= u.x <= l + VIEW_W and t <= u.y <= t + VIEW_H]
                 return
             if shift:
                 base = self.own_units()
@@ -337,6 +394,11 @@ class Controller:
                     self.groups[n] = list(self.own())
                     g.notify(PLAYER, f"Group {n} assigned")
                     log.debug("Control group %d = %d selected", n, len(self.groups[n]))
+                return None
+            if not ev.mod & pygame.KMOD_SHIFT:   # the number row picks from the build menu
+                items = self.build_menu()
+                if 1 <= n <= len(items):
+                    return self.execute(items[n - 1])
                 return None
             group = [e for e in self.groups.get(n, []) if e.alive and not getattr(e, "inside", None)]
             if group:
@@ -437,32 +499,17 @@ class Controller:
             self.mode = None
 
     def place(self, wx, wy, shift):
+        """Lay the foundation where the player clicked; the closest idle engineer goes to build it."""
         g = self.game
         kind = self.place_kind
-        cost = BUILDINGS[kind]["cost"]
         tx, ty = self.place_origin(wx, wy)
-        if not g.can_place(kind, tx, ty, PLAYER):
-            g.notify(PLAYER, "Can't build there")
-            return
-        team = g.teams[PLAYER]
-        if team.credits < cost:
+        if g.teams[PLAYER].credits < BUILDINGS[kind]["cost"]:
             g.notify(PLAYER, "Not enough credits")
             self.mode = None
             return
-        workers = [u for u in self.own_units() if u.kind == "engineer"]
-        if not workers:
-            self.mode = None
+        b = g.place_foundation(kind, tx, ty, PLAYER)
+        if b is None:
             return
-        s = BUILDINGS[kind]["size"]
-        cx, cy = (tx + s / 2) * TILE, (ty + s / 2) * TILE
-        worker = min(workers, key=lambda u: (u.x - cx) ** 2 + (u.y - cy) ** 2)
-        team.credits -= cost
-        worker.order_build(g, kind, tx, ty)
-        for helper in workers:   # every other selected engineer pitches in
-            if helper is not worker:
-                helper.order_assist(g, kind, tx, ty)
-        log.info("%s: player placed a %s at %s (%d engineer%s)", g.clock(), kind, (tx, ty), len(workers),
-                 "" if len(workers) == 1 else "s")
-        self.marker(cx, cy, (90, 230, 90))
+        self.marker(b.x, b.y, (90, 230, 90))
         if not shift:
             self.mode = None

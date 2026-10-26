@@ -54,6 +54,11 @@ class Unit(Entity):
         self.inside = None    # the bunker this soldier is manning, if any
         self.assist = None    # (kind, tx, ty) of a building site this engineer is helping on
         self.idle_t = 0.0     # drives the idle animation
+        # Idle scanning: turrets sweep to random bearings; soldiers look around and now and then
+        # check their weapon (check_t > 0 while they do).
+        self.look = None      # bearing being turned to (turret: relative to hull; infantry: absolute)
+        self.look_t = 0.0     # seconds until the next look-around
+        self.check_t = 0.0
         self.armed = self.damage > 0 and self.weapon is not None
 
         self.order = "idle"
@@ -417,8 +422,45 @@ class Unit(Entity):
         if self.moving:
             self.anim += dt * self.move_speed / self.speed
             self.kneel = 0.0   # heavy infantry stand up to move
-        if not self.aiming:
+        on_watch = self.order == "idle" and not self.moving and not self.suppressed and not self.retreat
+        if on_watch:
+            self._look_around(game, dt)
+        else:
+            self.look, self.check_t = None, 0.0
+        if not self.aiming and not (on_watch and self.has_turret):
             self._relax_turret(dt)
+
+    IDLE_TURRET_SPEED = 0.35   # fraction of TURRET_SPEED a turret sweeps at while scanning
+    IDLE_TURN_SPEED = 160      # degrees per second soldiers turn to look around
+
+    def _look_around(self, game, dt):
+        """Idle units keep watch: a turret sweeps to random bearings and pauses; a soldier turns
+        to face a random direction every few seconds and sometimes checks their weapon."""
+        rng = game.rng
+        self.look_t -= dt
+        self.check_t = max(0.0, self.check_t - dt)
+        if self.look_t <= 0 and self.check_t <= 0:
+            self.look_t = rng.uniform(2.0, 5.0)
+            if self.is_vehicle:
+                self.look = 0.0 if rng.random() < 0.25 else rng.uniform(-120, 120)
+            elif rng.random() < 0.3 and self.armed or rng.random() < 0.2:
+                self.check_t = 1.6          # look the weapon (or kit) over
+                self.look = None
+            else:
+                self.look = (self.facing + rng.choice((-1, 1)) * rng.uniform(45, 150)) % 360
+        if self.look is None:
+            return
+        if self.is_vehicle:
+            if not self.has_turret:
+                return
+            want = (self.facing + self.look) % 360
+            diff = (want - self.turret + 180) % 360 - 180
+            step = TURRET_SPEED * self.IDLE_TURRET_SPEED * dt
+            self.turret = want if abs(diff) <= step else (self.turret + math.copysign(step, diff)) % 360
+        else:
+            diff = (self.look - self.facing + 180) % 360 - 180
+            step = self.IDLE_TURN_SPEED * dt
+            self.facing = self.look if abs(diff) <= step else (self.facing + math.copysign(step, diff)) % 360
 
     def do_idle(self, game, dt):
         if self.kind == "engineer" or self.passive:
@@ -471,7 +513,8 @@ class Unit(Entity):
 
     def do_attack(self, game, dt):
         t = self.target
-        if t is None or not t.alive:
+        if t is None or not t.alive or getattr(t, "inside", None) or not game.can_target(self, t):
+            # gone, inside a structure, or out of sight up on a cliff
             self._target_gone(game)
             return
         if self.burst_left > 0:   # finish the burst before anything else
@@ -531,7 +574,7 @@ class Unit(Entity):
 
     def do_heal(self, game, dt):
         t = self.target
-        if t is None or not t.alive or t.hp >= t.max_hp:
+        if t is None or not t.alive or t.hp >= t.max_hp or t.inside:
             self._target_gone(game)
             return
         if self.chase(game, t, INTERACT, dt) and self.cooldown <= 0:  # hands-on: must touch

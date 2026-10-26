@@ -1,7 +1,7 @@
 """Engineer: builds, repairs and captures. Carries a pistol; the weapon slot is the tool kit."""
 
 UNIT = dict(
-    name="Engineer", cls="infantry", hotkey="e", desc="Builds, repairs and captures.",
+    name="Engineer", cls="infantry", desc="Builds, repairs and captures.",
     hp=40, armor=0, speed=38, sight=5, work=1.0,
     cost=75, time=9, supply=1, radius=4, height=13,
     weapon="pistol",

@@ -1,7 +1,7 @@
 """Tank: heavy armour and a turret-mounted main gun."""
 
 UNIT = dict(
-    name="Tank", cls="vehicle", target_class="heavy_vehicle", hotkey="t", desc="Heavy armour and a big gun.",
+    name="Tank", cls="vehicle", target_class="heavy_vehicle", desc="Heavy armour and a big gun.",
     hp=300, armor=4, speed=30, sight=7, hull_turn=140,
     cost=250, time=20, supply=3, radius=11, height=21,
     weapons=[

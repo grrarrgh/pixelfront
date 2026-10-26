@@ -1,7 +1,10 @@
 """Draws the map view: terrain, entities, effects, fog and selection overlays."""
+import math
+
 import pygame
 
-from .config import TILE, SCREEN_W, VIEW_H, PLAYER, NEUTRAL, BUILDINGS, TEAM_COLORS, TRACER_LIFE
+from .config import TILE, VIEW_W, VIEW_H, PLAYER, NEUTRAL, BUILDINGS, TEAM_COLORS, TRACER_LIFE
+from . import model3d as m3
 from .units import UNITS
 from .game import BOOM_TIME as SHOT_BOOM_TIME
 from .sprites import K, render_terrain, unit_anim, death_frame, DEATH_STEPS
@@ -24,21 +27,75 @@ def draw_shadow(surf, x, y, r, prone=False):
 TRACER_DASH, TRACER_GAP = 3, 3   # px: bullet trails read as "- - - -", not a solid beam
 
 
-def draw_tracer(surf, x1, y1, x2, y2, age=0.0, color=(255, 240, 170)):
+TRACER_DRIFT = 1.5   # px: dashes wander up to this far off the line, more towards the far end
+
+
+def draw_tracer(surf, x1, y1, x2, y2, age=0.0, seed=0.0, color=(255, 240, 170)):
     """A dashed bullet trail from (x1, y1) to (x2, y2). The dashes slide towards the target as
-    the tracer ages, so a burst reads as rounds in flight."""
+    the tracer ages, so a burst reads as rounds in flight, and drift a little to either side
+    (more the further they get) so rounds look like they spread rather than run on rails.
+    `seed` keeps one tracer's drift steady from frame to frame."""
     dx, dy = x2 - x1, y2 - y1
     length = (dx * dx + dy * dy) ** 0.5
     if length < 1:
         return
     ux, uy = dx / length, dy / length
+    nx, ny = -uy, ux   # sideways
     period = TRACER_DASH + TRACER_GAP
     d = (age / TRACER_LIFE) * period % period
+    i = 0
     while d < length:
         e = min(length, d + TRACER_DASH)
-        pygame.draw.line(surf, color, (round(x1 + ux * d), round(y1 + uy * d)),
-                         (round(x1 + ux * (e - 1)), round(y1 + uy * (e - 1))))
+        side = math.sin(seed * 997.0 + i * 2.3) * TRACER_DRIFT * (d / length)
+        ox, oy = nx * side, ny * side
+        pygame.draw.line(surf, color, (round(x1 + ux * d + ox), round(y1 + uy * d + oy)),
+                         (round(x1 + ux * (e - 1) + ox), round(y1 + uy * (e - 1) + oy)))
         d += period
+        i += 1
+
+
+FLAG_W, FLAG_H, POLE_H = 8, 5, 11
+# Where each building's flag pole stands: px down from the top of its sprite (on the roof).
+FLAG_ROOF = {"command": 14, "barracks": 12, "yard": 12, "bunker": 10, "tower": 5}
+
+
+def draw_flag(surf, x, base, color, t, phase=0.0):
+    """A team flag on a pole standing at (x, base), rippling in the wind: each column of cloth
+    rides a travelling wave that grows towards the free end."""
+    top = base - POLE_H
+    pygame.draw.line(surf, K, (x - 1, top), (x - 1, base))
+    pygame.draw.line(surf, (190, 196, 206), (x, top), (x, base))
+    dark = tuple(int(c * 0.7) for c in color)
+    for i in range(FLAG_W):
+        lift = math.sin(t * 6.0 + phase - i * 0.8) * (i / FLAG_W) * 1.6
+        y0 = top + round(lift)
+        shade = dark if math.cos(t * 6.0 + phase - i * 0.8) > 0.55 else color   # folds catch shadow
+        pygame.draw.line(surf, shade, (x + 1 + i, y0 + 1), (x + 1 + i, y0 + FLAG_H - 1))
+        surf.set_at((x + 1 + i, y0), K)
+        surf.set_at((x + 1 + i, y0 + FLAG_H), K)
+    end = top + round(math.sin(t * 6.0 + phase - FLAG_W * 0.8) * 1.6)
+    pygame.draw.line(surf, K, (x + 1 + FLAG_W, end), (x + 1 + FLAG_W, end + FLAG_H))
+
+
+def draw_garrison(surf, kind, occupants, gx, gy, t, color):
+    """One head per garrisoned soldier in the structure's front window, each scanning the
+    surroundings: turning slowly from side to side, pausing, with the rifle muzzle following."""
+    seats = m3.GARRISON_SEATS.get(kind, [])
+    n = len(occupants)
+    # Spread whoever is inside across the seats (2 in a 4-seat bunker sit in the middle two).
+    first = (len(seats) - n) // 2
+    for i, u in enumerate(occupants[:len(seats)]):
+        dx, dy = m3.footprint_to_screen(*seats[first + i])
+        x, y = round(gx + dx), round(gy + dy)
+        # Slow sweep with a hold at each end (clamped sine), each soldier on their own rhythm.
+        look = max(-1.0, min(1.0, 1.6 * math.sin(t * (0.7 + 0.13 * (u.id % 5)) + u.id * 1.9)))
+        off = round(look)
+        pygame.draw.rect(surf, K, (x - 2 + off, y - 2, 4, 3))             # helmet outline
+        pygame.draw.rect(surf, color, (x - 1 + off, y - 2, 2, 2))         # helmet
+        face = x + off + (1 if look > 0.3 else -2 if look < -0.3 else 0)
+        surf.set_at((face, y), (222, 172, 132))                           # face turned to look
+        tip = x + off + round(look * 3)
+        pygame.draw.line(surf, (46, 48, 54), (x + off, y + 1), (tip, y + 1))   # muzzle following
 
 
 def draw_projectile(surf, p, cx, cy):
@@ -117,8 +174,8 @@ class Renderer:
     def draw(self, surf, ctrl):
         g = self.game
         cx, cy = int(ctrl.cam_x), int(ctrl.cam_y)
-        view = surf.subsurface((0, 0, SCREEN_W, VIEW_H))
-        view.blit(self.terrain, (0, 0), (cx, cy, SCREEN_W, VIEW_H))
+        view = surf.subsurface((0, 0, VIEW_W, VIEW_H))
+        view.blit(self.terrain, (0, 0), (cx, cy, VIEW_W, VIEW_H))
 
         for d in g.decals:
             self.draw_decal(view, d, cx, cy)
@@ -127,11 +184,11 @@ class Renderer:
         vis = []
         for e in g.entities:
             if e.is_unit:
-                if not (-24 < e.x - cx < SCREEN_W + 24 and -24 < e.y - cy < VIEW_H + 24):
+                if not (-24 < e.x - cx < VIEW_W + 24 and -24 < e.y - cy < VIEW_H + 24):
                     continue
             else:
                 l, t, r, b = e.rect()
-                if r + 16 < cx or l - 16 > cx + SCREEN_W or b + 16 < cy or t - 16 > cy + VIEW_H:
+                if r + 16 < cx or l - 16 > cx + VIEW_W or b + 16 < cy or t - 16 > cy + VIEW_H:
                     continue
             if g.seen(e):
                 vis.append(e)
@@ -158,7 +215,7 @@ class Renderer:
                 self.draw_building(view, e, cx, cy)
 
         for tr in g.tracers:
-            draw_tracer(view, tr[0] - cx, tr[1] - cy, tr[2] - cx, tr[3] - cy, tr[4])
+            draw_tracer(view, tr[0] - cx, tr[1] - cy, tr[2] - cx, tr[3] - cy, tr[4], tr[5])
         for p in g.projectiles:
             draw_projectile(view, p, cx, cy)
         for b in g.booms:
@@ -177,7 +234,7 @@ class Renderer:
                 l, t, r, b = e.rect()
                 hp_bar(view, l - cx + 4, t - cy - 4, r - l - 8, e.hp / e.max_hp)
 
-        view.blit(g.fog.surface, (0, 0), (cx, cy, SCREEN_W, VIEW_H))
+        view.blit(g.fog.surface, (0, 0), (cx, cy, VIEW_W, VIEW_H))
 
         for e in ctrl.selection:
             if e.is_building and e.team == PLAYER and e.rally is not None:
@@ -226,7 +283,7 @@ class Renderer:
                 pygame.draw.rect(view, col, (x + sx, y + sy, 4, 3))
             return
         x, y = int(d["x"]) - cx, int(d["y"]) - cy
-        if -40 < x < SCREEN_W + 40 and -40 < y < VIEW_H + 40:
+        if -40 < x < VIEW_W + 40 and -40 < y < VIEW_H + 40:
             draw_death(view, self.sp, d, age, x, y)
 
     def draw_point(self, view, p, cx, cy):
@@ -234,14 +291,7 @@ class Renderer:
         img, (ox, oy) = self.sp.derrick(self.game.time)
         view.blit(img, (x - ox, y - oy))
         # Owner's flag on a pole in the middle of the pad, flying clear above the pump.
-        col = team_color(p.team)
-        top = y - oy - 6
-        pygame.draw.line(view, K, (x - 1, top), (x - 1, y - 2))
-        pygame.draw.line(view, (190, 196, 206), (x, top), (x, y - 2))
-        wave = int(self.game.time * 4 + p.id) % 2
-        flag = [(x + 1, top), (x + 8, top + 1 + wave), (x + 8, top + 5 + wave), (x + 1, top + 5)]
-        pygame.draw.polygon(view, col, flag)
-        pygame.draw.polygon(view, K, flag, 1)
+        draw_flag(view, x, y - 2, team_color(p.team), self.game.time, p.id)
         capturing = p.progress < 1 and p.progress > 0
         if capturing or p.contested:
             team = p.capturer if p.team == NEUTRAL else p.team
@@ -256,6 +306,12 @@ class Renderer:
         view.blit(img, (bx, by))
         if not e.complete:
             return
+        # Team flag on the roof at the back-right corner, waving.
+        draw_flag(view, bx + img.get_width() - 12, by + FLAG_ROOF.get(e.kind, 10), team_color(e.team),
+                  self.game.time, e.id * 1.7)
+        if e.occupants:
+            draw_garrison(view, e.kind, e.occupants, int(e.x) - cx, int(e.y) - cy, self.game.time,
+                          team_color(e.team))
         if e.flash > 0:
             view.blit(self.sp.building_flash(e.kind, e.team), (bx, by))
         frac = e.hp / e.max_hp

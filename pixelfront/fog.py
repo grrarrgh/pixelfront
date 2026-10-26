@@ -1,7 +1,13 @@
-"""Player fog of war: black where unexplored, dimmed where explored but not currently seen."""
+"""Vision and the player's fog of war (black where unexplored, dimmed where explored but not
+currently seen).
+
+High ground: nobody can see up onto a plateau from below, but from on top you see down as
+normal. Cliff faces themselves are visible from below.
+"""
 import pygame
 
 from .config import TILE, PLAYER
+from .world import CLIFF, HIGH
 
 _circles = {}
 
@@ -12,6 +18,31 @@ def _circle(r):
         pts = [(dx, dy) for dy in range(-r, r + 1) for dx in range(-r, r + 1) if dx * dx + dy * dy <= r * r + r]
         _circles[r] = pts
     return pts
+
+
+def vision(game, team):
+    """Tiles `team` can currently see, as a bytearray (1 = visible)."""
+    world = game.world
+    w, h = world.w, world.h
+    height, tiles = world.height, world.tiles
+    vis = bytearray(w * h)
+    for e in game.entities:
+        if e.team != team:
+            continue
+        if e.is_unit:
+            cx, cy = e.tile()
+            r = e.sight
+        else:
+            cx, cy = e.center_tile()
+            r = e.sight + e.size // 2
+        up_high = world.level(cx, cy) == HIGH
+        for dx, dy in _circle(r):
+            x, y = cx + dx, cy + dy
+            if 0 <= x < w and 0 <= y < h:
+                i = y * w + x
+                if up_high or height[i] != HIGH or tiles[i] == CLIFF:
+                    vis[i] = 1
+    return vis
 
 
 class Fog:
@@ -31,23 +62,8 @@ class Fog:
             if self.surface is None:
                 self._redraw()
             return
-        vis = bytearray(w * h)
-        exp = self.explored
-        for e in game.entities:
-            if e.team != PLAYER:
-                continue
-            if e.is_unit:
-                cx, cy = e.tile()
-                r = e.sight
-            else:
-                cx, cy = e.center_tile()
-                r = e.sight + e.size // 2
-            for dx, dy in _circle(r):
-                x, y = cx + dx, cy + dy
-                if 0 <= x < w and 0 <= y < h:
-                    i = y * w + x
-                    vis[i] = 1
-                    exp[i] = 1
+        vis = vision(game, PLAYER)
+        self.explored = bytearray(a | b for a, b in zip(self.explored, vis))
         self.visible = vis
         self._redraw()
 

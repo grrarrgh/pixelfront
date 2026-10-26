@@ -2,8 +2,12 @@
 import logging
 import math
 
-from .config import (TILE, BUILDINGS, NEUTRAL, POINT_SIGHT, BURST_GAP,
-                     GARRISON_RELOAD, GARRISON_DAMAGE, GARRISON_RANGE, GARRISON_HEAL)
+from .config import TILE, BUILDINGS, NEUTRAL, POINT_SIGHT, BURST_GAP
+
+# What manning a structure does for its garrison unless BUILDINGS[kind]["garrison"] says otherwise.
+GARRISON_DEFAULTS = dict(reload=1.0, damage=1.0, range=1.0, heal=0.0, sight=0)
+# Where shots leave a garrisoned structure: (reach towards the target in x, in y, height above centre).
+FIRING_PORTS = {"bunker": (9, 5, -7), "tower": (3, 2, -22)}
 
 
 log = logging.getLogger(__name__)
@@ -80,15 +84,21 @@ class Building(Structure):
         self.name = st["name"]
         self.max_hp = st["hp"]
         self.armor = st["armor"]
-        self.sight = st["sight"]
+        self.base_sight = st["sight"]
         self.complete = complete
         self.progress = 1.0 if complete else 0.0
         self.hp = self.max_hp if complete else self.max_hp * 0.1
         self.queue = []  # dicts: kind, loadout, cost, time
         self.prod_timer = 0.0
         self.rally = None  # a tile (tx, ty) or a CapturePoint
-        self.capacity = st.get("capacity", 0)   # infantry it can hold (bunkers)
+        self.capacity = st.get("capacity", 0)   # infantry it can hold (bunkers, towers)
         self.occupants = []
+        self.garrison = dict(GARRISON_DEFAULTS, **st.get("garrison", {}))
+
+    @property
+    def sight(self):
+        """Manned lookouts see further."""
+        return self.base_sight + (self.garrison["sight"] if self.occupants else 0)
 
     def add_progress(self, game, dt):
         inc = dt * game.build_speed / self.stats["time"]
@@ -114,17 +124,18 @@ class Building(Structure):
             game.spawn_unit(item["kind"], self, item["loadout"])
 
     def _man_the_walls(self, game, dt):
-        """Garrisoned soldiers shoot from the bunker: faster reloads, more damage and range.
-        They also slowly patch themselves up while under cover."""
+        """Garrisoned soldiers shoot from the structure with its garrison bonuses (a bunker:
+        faster reloads, more damage and range, slow healing; a tower: much more range)."""
         reach = self.size * TILE / 2
+        gar = self.garrison
         for u in self.occupants:
             u.x, u.y = self.x, self.y
-            u.hp = min(u.max_hp, u.hp + GARRISON_HEAL * dt)
+            u.hp = min(u.max_hp, u.hp + gar["heal"] * dt)
             u.cooldown -= dt
             u.lunge = max(0.0, u.lunge - dt)
             if not u.armed:
                 continue
-            rng = u.range * GARRISON_RANGE + reach
+            rng = u.range * gar["range"] + reach
             t = u.target
             if t is None or not t.alive or u.edge_dist(t) > rng:
                 t = u.target = game.find_enemy_near(u, rng)
@@ -137,14 +148,15 @@ class Building(Structure):
                 if u.burst_timer <= 0:
                     u.burst_left -= 1
                     u.burst_timer = BURST_GAP
-                    game.attack(u, t, GARRISON_DAMAGE, self.firing_port(t))
+                    game.attack(u, t, gar["damage"], self.firing_port(t))
             elif u.cooldown <= 0:
-                u.cooldown = u.attack_time * GARRISON_RELOAD
+                u.cooldown = u.attack_time * gar["reload"]
                 u.lunge = 0.12
                 u.burst_left, u.burst_timer = u.burst - 1, BURST_GAP
-                game.attack(u, t, GARRISON_DAMAGE, self.firing_port(t))
+                game.attack(u, t, gar["damage"], self.firing_port(t))
 
     def firing_port(self, target):
-        """Where shots leave the bunker: the slit facing the target."""
+        """Where shots leave the structure: the slit (or parapet) facing the target."""
+        rx, ry, up = FIRING_PORTS.get(self.kind, (9, 5, -7))
         a = math.atan2(target.y - self.y, target.x - self.x)
-        return self.x + math.cos(a) * 9, self.y - 7 + math.sin(a) * 5
+        return self.x + math.cos(a) * rx, self.y + up + math.sin(a) * ry

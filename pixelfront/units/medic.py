@@ -1,7 +1,7 @@
 """Medic: unarmed; heals infantry it touches. The weapon slot is the medical kit."""
 
 UNIT = dict(
-    name="Medic", cls="infantry", hotkey="m", desc="Heals infantry it touches.",
+    name="Medic", cls="infantry", desc="Heals infantry it touches.",
     hp=45, armor=0, speed=42, sight=6, heal=6, cooldown=1.0,   # heals `heal` hp every `cooldown` s
     cost=70, time=9, supply=1, radius=4, height=13,
     weapon=None,

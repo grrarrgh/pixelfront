@@ -1,4 +1,4 @@
-﻿"""Game-wide constants and unit/building definitions."""
+"""Game-wide constants and unit/building definitions."""
 
 # Logical resolution; the window scales this up with nearest-neighbour filtering.
 SCREEN_W, SCREEN_H = 640, 360
@@ -6,6 +6,8 @@ TILE = 16
 MAP_W, MAP_H = 64, 64
 HUD_H = 80
 VIEW_H = SCREEN_H - HUD_H
+SIDEBAR_W = 80             # build menu down the right-hand side of the map view
+VIEW_W = SCREEN_W - SIDEBAR_W
 TOPBAR_H = 11
 FPS = 60
 
@@ -63,7 +65,8 @@ STEER_MAX = 28             # how far front wheels turn into a bend, degrees
 # lanes to move through. (A coarser grid, e.g. 4 with offset 2, lines bases up in blocks.)
 BUILD_GRID = 1
 GRID_OFFSET = 0            # grid lines fall on tiles where (tile - GRID_OFFSET) % BUILD_GRID == 0
-BUILD_SPEED = 0.5          # global construction and training speed (0.5 = everything takes twice as long)
+QUEUE_MAX = 15             # units a factory can have queued
+BUILD_SPEED = 0.5         # global construction and training speed (0.5 = everything takes twice as long)
 SANDBOX_BUILD_SPEED = 10   # the test range builds and trains this many times faster than that
 KNEEL_TIME = 0.5           # seconds heavy infantry take to kneel before they can fire
 
@@ -71,15 +74,23 @@ KNEEL_TIME = 0.5           # seconds heavy infantry take to kneel before they ca
 
 BUILDINGS = {
     "command": dict(name="Command Center", size=3, hp=1500, armor=4, cost=500, time=60,
-                    sight=8, trains=["engineer"], hotkey="c",
+                    sight=8, trains=["engineer"],
                     desc="Trains engineers. +1 credit/s."),
     "barracks": dict(name="Barracks", size=2, hp=800, armor=3, cost=200, time=30,
-                     sight=6, trains=["rifleman", "medic", "heavy"], hotkey="b",
+                     sight=6, trains=["rifleman", "medic", "heavy"],
                      desc="Trains infantry."),
+    # garrison = what manning it does for the soldiers inside: reload (time x), damage x,
+    # range x, heal (hp/s), sight (+tiles for the building while manned).
     "bunker": dict(name="Bunker", size=2, hp=900, armor=5, cost=150, time=20,
-                   sight=7, trains=[], capacity=4, hotkey="k",
+                   sight=7, trains=[], capacity=4,
+                   garrison=dict(reload=GARRISON_RELOAD, damage=GARRISON_DAMAGE, range=GARRISON_RANGE,
+                                 heal=GARRISON_HEAL),
                    desc="Man it with infantry: faster reloads, +10% damage and range."),
+    "tower": dict(name="Tower", size=1, hp=450, armor=4, cost=120, time=15,
+                  sight=5, trains=[], capacity=2,
+                  garrison=dict(range=1.35, sight=6),
+                  desc="Lookout for 2 infantry: they see and shoot much further. No healing."),
     "yard": dict(name="Vehicle Yard", size=3, hp=1000, armor=4, cost=300, time=40,
-                 sight=6, trains=["jeep", "tank"], hotkey="y",
+                 sight=6, trains=["jeep", "tank"],
                  desc="Builds jeeps and tanks."),
 }

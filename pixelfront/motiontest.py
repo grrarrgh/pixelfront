@@ -191,7 +191,7 @@ class MotionTest:
             ty += self.rng.uniform(-4, 3)
         style = weapon_def(st["weapon"])["projectile"]
         if style is None:   # bullets: instant tracer
-            c["shots"].append([sx, sy, tx, ty, 0.0])
+            c["shots"].append([sx, sy, tx, ty, 0.0, self.rng.random()])
             self.burst(c, tx, ty, (255, 230, 160) if hit else (200, 176, 130), 2, 12)
         else:
             spec = PROJECTILE_STYLES[style]

@@ -1,10 +1,8 @@
-"""Bottom control panel, top resource bar, minimap, radar and tooltips."""
-import math
-
+"""Bottom control panel, sidebar build menu, top resource bar, minimap and tooltips."""
 import pygame
 
-from .config import (SCREEN_W, SCREEN_H, VIEW_H, HUD_H, TOPBAR_H, TILE, PLAYER, ENEMY, NEUTRAL,
-                     MAX_CAPTURERS, POINT_INCOME)
+from .config import (SCREEN_W, SCREEN_H, VIEW_W, VIEW_H, HUD_H, TOPBAR_H, TILE, PLAYER, ENEMY, NEUTRAL,
+                     MAX_CAPTURERS, POINT_INCOME, SIDEBAR_W, QUEUE_MAX)
 from .units import UNITS
 from .font import draw_text, text_width
 from .modules import loadout_summary, format_stat, armor_rank_info
@@ -21,6 +19,13 @@ GREY = (170, 166, 180)
 CARD_X, CARD_Y = 498, VIEW_H + 7
 INFO_X = 80
 TEXT_X = 128
+SLOT, SLOT_STEP = 18, 20       # training-queue slots (room for 15 in a row)
+
+# Sidebar: a big Command Center portrait (click to jump there), then the numbered build menu.
+SB_X = VIEW_W
+PORTRAIT = pygame.Rect(SB_X + 4, TOPBAR_H + 4, SIDEBAR_W - 8, 52)
+MENU_Y = PORTRAIT.bottom + 14
+ROW_H = 26
 
 
 def bevel(surf, rect, raised=True, fill=None):
@@ -41,17 +46,11 @@ class HUD:
         w = game.world
         self.minimap_rect = pygame.Rect(8, VIEW_H + 8, w.w, w.h)
         self.mm_base = render_minimap(w)
-        # Radar in the top-right corner: the same map in radar green.
-        self.radar_rect = pygame.Rect(SCREEN_W - w.w - 5, TOPBAR_H + 4, w.w, w.h)
-        self.radar_base = self.mm_base.copy()
-        for y in range(w.h):
-            for x in range(w.w):
-                r, g, b, _ = self.radar_base.get_at((x, y))
-                lum = (r * 3 + g * 4 + b) // 8
-                self.radar_base.set_at((x, y), (lum // 7, 30 + lum // 3, 14 + lum // 6))
-        for k in range(0, w.w, 8):
-            pygame.draw.line(self.radar_base, (24, 70, 36), (k, 0), (k, w.h - 1))
-            pygame.draw.line(self.radar_base, (24, 70, 36), (0, k), (w.w - 1, k))
+        self.portrait_rect = PORTRAIT
+        self.sidebar = pygame.Surface((SIDEBAR_W, VIEW_H))
+        self.sidebar.fill(PANEL)
+        pygame.draw.line(self.sidebar, K, (0, 0), (0, VIEW_H))
+        pygame.draw.line(self.sidebar, PANEL_L, (1, 0), (1, VIEW_H))
         self.topbar = pygame.Surface((SCREEN_W, TOPBAR_H), pygame.SRCALPHA)
         self.topbar.fill((10, 8, 14, 180))
         self.panel = pygame.Surface((SCREEN_W, HUD_H))
@@ -86,7 +85,16 @@ class HUD:
         return None
 
     def queue_rects(self, b):
-        return [pygame.Rect(TEXT_X + i * 25, VIEW_H + 46, 22, 22) for i in range(len(b.queue))]
+        return [pygame.Rect(TEXT_X + i * SLOT_STEP, VIEW_H + 48, SLOT, SLOT) for i in range(len(b.queue))]
+
+    def menu_rects(self, n):
+        return [pygame.Rect(SB_X + 4, MENU_Y + i * ROW_H, SIDEBAR_W - 8, ROW_H - 2) for i in range(n)]
+
+    def menu_item_at(self, pos, n):
+        for i, r in enumerate(self.menu_rects(n)):
+            if r.collidepoint(pos):
+                return i
+        return None
 
     def queue_slot_at(self, pos, ctrl):
         sel = ctrl.selection
@@ -97,11 +105,8 @@ class HUD:
                 return i
         return None
 
-    def radar_to_world(self, pos):
-        return self.minimap_to_world(pos, self.radar_rect)
-
-    def minimap_to_world(self, pos, rect=None):
-        r = rect or self.minimap_rect
+    def minimap_to_world(self, pos):
+        r = self.minimap_rect
         x = min(max(pos[0], r.left), r.right - 1) - r.left
         y = min(max(pos[1], r.top), r.bottom - 1) - r.top
         return x * TILE + TILE / 2, y * TILE + TILE / 2
@@ -109,14 +114,81 @@ class HUD:
     # ---- drawing ------------------------------------------------------------
 
     def draw(self, surf, ctrl):
+        items = ctrl.build_menu()
+        self.draw_sidebar(surf, ctrl, items)
         self.draw_topbar(surf)
-        self.draw_radar(surf, ctrl)
         surf.blit(self.panel, (0, VIEW_H))
         self.draw_minimap(surf, ctrl)
         self.draw_info(surf, ctrl)
         cmds = ctrl.commands()
         self.draw_card(surf, ctrl, cmds)
-        self.draw_tooltip(surf, ctrl, cmds)
+        i = self.button_at(ctrl.mouse, len(cmds))
+        if i is not None:
+            self.draw_tooltip(surf, cmds[i], (SCREEN_W - 4, VIEW_H - 2), above=True)
+        i = self.menu_item_at(ctrl.mouse, len(items))
+        if i is not None:
+            r = self.menu_rects(len(items))[i]
+            self.draw_tooltip(surf, items[i], (SB_X - 3, r.y), above=False)
+
+    def draw_sidebar(self, surf, ctrl, items):
+        g = self.game
+        surf.blit(self.sidebar, (SB_X, 0))
+        mouse = ctrl.mouse
+        # Command Center portrait: click to jump there.
+        r = self.portrait_rect
+        has_cc = any(b.team == PLAYER and b.kind == "command" for b in g.buildings)
+        bevel(surf, r, raised=not r.collidepoint(mouse), fill=(176, 146, 98))
+        img = self.sp.building_portrait("command", PLAYER, r.w - 10)
+        clip = surf.get_clip()
+        surf.set_clip(r.inflate(-2, -2))
+        surf.blit(img, img.get_rect(center=(r.centerx, r.centery + 2)))
+        surf.set_clip(clip)
+        if not has_cc:
+            dim = pygame.Surface((r.w - 2, r.h - 2), pygame.SRCALPHA)
+            dim.fill((0, 0, 0, 150))
+            surf.blit(dim, (r.x + 1, r.y + 1))
+        # Menu title: the selected factory, or the Command Center by default.
+        title = ctrl.menu_title()
+        draw_text(surf, self.clip_text(title, SIDEBAR_W - 8), SB_X + 4, r.bottom + 4, YELLOW)
+        credits = g.teams[PLAYER].credits
+        for it, rr in zip(items, self.menu_rects(len(items))):
+            hover = rr.collidepoint(mouse)
+            active = ctrl.mode == "place" and it["id"] == "build:" + str(ctrl.place_kind)
+            bevel(surf, rr, raised=not active, fill=(84, 78, 96) if hover else (66, 62, 76))
+            if it.get("unit"):
+                kind = it["unit"]
+                icon = fit(self.sp.unit(kind, PLAYER, g.teams[PLAYER].designs[kind]).image, 20)
+            else:
+                icon = fit(self.sp.icons[it["icon"]], 20)
+            surf.blit(icon, icon.get_rect(center=(rr.x + 12, rr.centery)))
+            draw_text(surf, it["key"], rr.x + 2, rr.y + 1, YELLOW)
+            tx = rr.x + 25
+            draw_text(surf, self.clip_text(it["name"], rr.right - tx - 2), tx, rr.y + 3, (230, 230, 230))
+            ok = it["cost"] <= credits
+            draw_text(surf, str(it["cost"]), tx, rr.y + 13, YELLOW if ok else (240, 90, 80))
+            if it.get("unit"):
+                self.draw_training(surf, ctrl, it["unit"], rr)
+            if not ok:
+                dim = pygame.Surface((rr.w - 2, rr.h - 2), pygame.SRCALPHA)
+                dim.fill((0, 0, 0, 90))
+                surf.blit(dim, (rr.x + 1, rr.y + 1))
+
+    def draw_training(self, surf, ctrl, kind, rr):
+        """How many of this unit are queued, and the progress of the one in training."""
+        halls = ctrl.factories_for(kind)
+        queued = sum(1 for b in halls for it in b.queue if it["kind"] == kind)
+        if queued:
+            draw_text(surf, f"x{queued}", rr.right - 3, rr.y + 13, (150, 220, 150), align="right")
+        active = [b for b in halls if b.queue and b.queue[0]["kind"] == kind]
+        if active:
+            b = max(active, key=lambda b: b.prod_timer / b.queue[0]["time"])
+            hp_bar(surf, rr.x + 25, rr.bottom - 3, rr.w - 28, b.prod_timer / b.queue[0]["time"])
+
+    @staticmethod
+    def clip_text(text, width):
+        while text and text_width(text) > width:
+            text = text[:-1]
+        return text
 
     def draw_topbar(self, surf):
         g = self.game
@@ -149,45 +221,6 @@ class HUD:
             c = 255 if age < 4 else int(255 * max(0.2, 1 - (age - 4) / 2))
             draw_text(surf, text, 4, TOPBAR_H + 4 + i * 8, (c, c, c))
 
-    def draw_radar(self, surf, ctrl):
-        """Top-right radar: fog of war, a rotating sweep and blips for everything on the map."""
-        g = self.game
-        r = self.radar_rect
-        pygame.draw.rect(surf, (8, 14, 10), r.inflate(6, 6))
-        pygame.draw.rect(surf, (70, 130, 84), r.inflate(6, 6), 1)
-        surf.blit(self.radar_base, r)
-        blink = int(g.time * 3) % 2
-        for e in g.entities:
-            if not g.seen(e):
-                continue
-            if e.is_unit:
-                tx, ty = e.tile()
-                if e.team == PLAYER:
-                    surf.set_at((r.x + tx, r.y + ty), (150, 255, 160))
-                else:
-                    size = 2 if blink else 1
-                    surf.fill((255, 70, 60), (r.x + tx, r.y + ty, size, size))
-            elif e.is_point:
-                surf.fill(team_color(e.team), (r.x + e.tx, r.y + e.ty, 2, 2))
-            else:
-                col = (110, 230, 130) if e.team == PLAYER else (230, 70, 60)
-                pygame.draw.rect(surf, col, (r.x + e.tx, r.y + e.ty, e.size, e.size), 1)
-        surf.blit(g.fog.small, r)
-        # Sweep line with a short fading trail.
-        cx, cy = r.center
-        clip = surf.get_clip()
-        surf.set_clip(r)
-        for k in range(6):
-            a = g.time * 2.0 - k * 0.07
-            ex = cx + math.cos(a) * r.w * 0.75
-            ey = cy + math.sin(a) * r.h * 0.75
-            pygame.draw.line(surf, (40, max(0, 200 - k * 35), 70), (cx, cy), (int(ex), int(ey)))
-        surf.set_clip(clip)
-        cam = pygame.Rect(r.x + int(ctrl.cam_x / TILE), r.y + int(ctrl.cam_y / TILE),
-                          SCREEN_W // TILE, VIEW_H // TILE)
-        pygame.draw.rect(surf, (230, 240, 230), cam.clip(r), 1)
-        draw_text(surf, "RADAR", r.x, r.bottom + 4, (110, 200, 120))
-
     def draw_minimap(self, surf, ctrl):
         g = self.game
         r = self.minimap_rect
@@ -207,7 +240,7 @@ class HUD:
                 pygame.draw.rect(surf, col, (r.x + e.tx, r.y + e.ty, e.size, e.size))
         surf.blit(g.fog.small, r)
         cam = pygame.Rect(r.x + int(ctrl.cam_x / TILE), r.y + int(ctrl.cam_y / TILE),
-                          SCREEN_W // TILE, VIEW_H // TILE)
+                          VIEW_W // TILE, VIEW_H // TILE)
         pygame.draw.rect(surf, (240, 240, 240), cam.clip(r.inflate(2, 2)), 1)
         if g.alert_pos and g.time - g.last_alert < 3 and int(g.time * 4) % 2:
             ax, ay = int(g.alert_pos[0] / TILE) + r.x, int(g.alert_pos[1] / TILE) + r.y
@@ -278,9 +311,10 @@ class HUD:
         if e.queue:
             item = e.queue[0]
             draw_text(surf, "Training " + UNITS[item["kind"]]["name"], x, y + 9, (230, 230, 230))
+            draw_text(surf, f"{len(e.queue)}/{QUEUE_MAX}", CARD_X - 8, y + 9, GREY, align="right")
             for i, (it, r) in enumerate(zip(e.queue, self.queue_rects(e))):
                 bevel(surf, r, fill=(58, 54, 66))
-                img = fit(self.sp.unit(it["kind"], PLAYER, it["loadout"]).image, 18)
+                img = fit(self.sp.unit(it["kind"], PLAYER, it["loadout"]).image, 14)
                 surf.blit(img, img.get_rect(center=r.center))
                 if i == 0:
                     hp_bar(surf, r.x + 2, r.bottom + 2, r.w - 4, e.prod_timer / it["time"])
@@ -303,7 +337,7 @@ class HUD:
         mouse = ctrl.mouse
         for cmd, r in zip(cmds, self.button_rects(len(cmds))):
             hover = r.collidepoint(mouse)
-            active = ctrl.mode == cmd["id"] or (ctrl.mode == "place" and cmd["id"] == "build:" + str(ctrl.place_kind))
+            active = ctrl.mode == cmd["id"]
             bevel(surf, r, raised=not active, fill=(84, 78, 96) if hover else (66, 62, 76))
             if cmd.get("unit"):
                 kind = cmd["unit"]
@@ -317,11 +351,9 @@ class HUD:
                 surf.blit(dim, (r.x + 1, r.y + 1))
             draw_text(surf, cmd["key"], r.x + 2, r.y + 2, YELLOW)
 
-    def draw_tooltip(self, surf, ctrl, cmds):
-        i = self.button_at(ctrl.mouse, len(cmds))
-        if i is None:
-            return
-        cmd = cmds[i]
+    def draw_tooltip(self, surf, cmd, anchor, above):
+        """A tooltip whose right edge sits at anchor[0]; above=True puts its bottom at anchor[1],
+        otherwise its top."""
         team = self.game.teams[PLAYER]
         lines = [(f"{cmd['title']} [{cmd['key'].upper()}]", YELLOW)]
         if cmd.get("desc"):
@@ -339,7 +371,8 @@ class HUD:
             lines.append((f"Build time: {cmd['time']:.0f}s{note}", (230, 230, 230)))
         w = max(text_width(t) for t, _ in lines) + 8
         h = len(lines) * 8 + 5
-        x, y = SCREEN_W - w - 4, VIEW_H - h - 2
+        x = anchor[0] - w
+        y = anchor[1] - h if above else min(anchor[1], VIEW_H - h - 2)
         pygame.draw.rect(surf, (20, 16, 24), (x, y, w, h))
         pygame.draw.rect(surf, PANEL_L, (x, y, w, h), 1)
         for j, (text, col) in enumerate(lines):

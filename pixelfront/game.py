@@ -8,9 +8,9 @@ from . import weapons
 from .ai import AI
 from .config import (TILE, PLAYER, ENEMY, NEUTRAL, BUILDINGS, START_CREDITS, SUPPLY_CAP,
                      BASE_INCOME, POINT_INCOME, CAPTURE_TIME, CAPTURE_RADIUS, MAX_CAPTURERS,
-                     BUILD_GRID, GRID_OFFSET, BUILD_SPEED, SANDBOX_BUILD_SPEED, TRACER_LIFE)
+                     BUILD_GRID, GRID_OFFSET, BUILD_SPEED, SANDBOX_BUILD_SPEED, TRACER_LIFE, QUEUE_MAX)
 from .entities import Building, CapturePoint, dist_point_rect
-from .fog import Fog
+from .fog import Fog, vision
 from .modules import default_loadout, loadout_cost, loadout_time, loadout_summary
 from .units import UNITS
 from .units.unit import Unit
@@ -55,7 +55,8 @@ class Game:
         self.entities = []
         self.units, self.buildings, self.points = [], [], []
         self.projectiles = []
-        self.tracers = []    # [x1, y1, x2, y2, age]
+        self.tracers = []    # [x1, y1, x2, y2, age, seed]
+        self.staff_timer = 1.0
         self.booms = []      # [x, y, start time, radius]
         self.particles = []  # [x, y, vx, vy, life, colour]
         self.decals = []
@@ -68,6 +69,7 @@ class Game:
         self.alert_pos = None
         self.fog = Fog(self.world)
         self._fog_timer = 0.0
+        self.vision = {}   # team -> tiles it currently sees (bytearray), refreshed with the fog
         self._check_timer = 0.0
 
         for tx, ty in points:
@@ -85,7 +87,7 @@ class Game:
             self.teams[PLAYER].credits = 5000
             cc = self.buildings[0]
             helper = AI(self, PLAYER)   # borrow the AI's site finder to lay out the base
-            for kind in ("barracks", "yard", "bunker"):
+            for kind in ("barracks", "yard", "bunker", "tower"):
                 spot = helper.find_spot(kind, cc)
                 if spot:
                     self.add(Building(kind, PLAYER, *spot))
@@ -95,7 +97,7 @@ class Game:
                 self.refresh()
                 self.spawn_unit(kind, cc, dict(default_loadout(kind), **lo), announce=False)
             self.spawn_test_targets()
-        self.fog.update(self)
+        self.update_vision()
 
     def spawn_test_targets(self):
         """Passive enemy dummies near the player's base, one of each kind plus loadout variants."""
@@ -196,6 +198,10 @@ class Game:
             p.update(self, dt)
         self._separate(dt)
         self._update_points(dt)
+        self.staff_timer -= dt
+        if self.staff_timer <= 0:
+            self.staff_timer = 1.0
+            self._staff_foundations()
         for t in self.teams.values():
             t.credits += t.income * dt
 
@@ -225,7 +231,7 @@ class Game:
         self._fog_timer -= dt
         if self._fog_timer <= 0:
             self._fog_timer = 0.2
-            self.fog.update(self)
+            self.update_vision()
 
         self._check_timer -= dt
         if self._check_timer <= 0:
@@ -349,17 +355,39 @@ class Game:
                     return True
         return False
 
+    def update_vision(self):
+        self.fog.update(self)
+        self.vision = {PLAYER: self.fog.visible, ENEMY: vision(self, ENEMY)}
+
+    def level_of(self, e):
+        """Ground level an entity stands on (units: their tile; structures: their centre)."""
+        return self.world.level(*(e.tile() if e.is_unit else e.center_tile()))
+
+    def can_target(self, shooter, target):
+        """High ground: you can't shoot what's above you unless your side can see it."""
+        if self.level_of(target) <= self.level_of(shooter):
+            return True
+        vis = self.vision.get(shooter.team)
+        if vis is None:
+            return True
+        w = self.world.w
+        if target.is_unit:
+            tx, ty = target.tile()
+            return vis[ty * w + tx] == 1
+        return any(vis[y * w + x] for y in range(target.ty, target.ty + target.size)
+                   for x in range(target.tx, target.tx + target.size))
+
     def find_enemy_near(self, unit, radius):
         best, bd = None, radius
         for e in self.units:
             if e.team != unit.team:
                 d = math.hypot(e.x - unit.x, e.y - unit.y)
-                if d < bd:
+                if d < bd and self.can_target(unit, e):
                     best, bd = e, d
         if best:
             return best
         for b in self.buildings:
-            if b.team != unit.team:
+            if b.team != unit.team and self.can_target(unit, b):
                 d = dist_point_rect(unit.x, unit.y, b.rect())
                 if d < bd:
                     best, bd = b, d
@@ -450,7 +478,7 @@ class Game:
         team = self.teams[building.team]
         loadout = dict(team.designs[kind])
         cost = loadout_cost(kind, loadout)
-        if len(building.queue) >= 5:
+        if len(building.queue) >= QUEUE_MAX:
             self.notify(building.team, "Queue is full")
             return False
         if team.credits < cost:
@@ -499,6 +527,47 @@ class Game:
         log.info("%s: %s started building %s at %s", self.clock(), TEAM_NAMES[worker.team], b.name, (tx, ty))
         self._push_out(b)
         worker.order_construct(self, b)
+
+    def place_foundation(self, kind, tx, ty, team):
+        """Lay a building's foundation right away (paying for it), then send the closest idle
+        engineer to put it up. Returns the new building, or None if it can't go there."""
+        cost = BUILDINGS[kind]["cost"]
+        if not self.can_place(kind, tx, ty, team):
+            self.notify(team, "Can't build there")
+            return None
+        if self.teams[team].credits < cost:
+            self.notify(team, "Not enough credits")
+            return None
+        self.teams[team].credits -= cost
+        b = self.add(Building(kind, team, tx, ty, complete=False))
+        self.refresh()
+        self._push_out(b)
+        worker = self.assign_builder(b)
+        log.info("%s: %s laid the foundation of a %s at %s; %s", self.clock(), TEAM_NAMES[team], b.name,
+                 (tx, ty), f"{worker.name} #{worker.id} sent to build it" if worker else "no idle engineer yet")
+        if worker is None:
+            self.notify(team, "Foundation laid: waiting for an idle engineer")
+        return b
+
+    def assign_builder(self, building):
+        """Send the closest idle engineer of the building's team to build it."""
+        idle = [u for u in self.units if u.team == building.team and u.kind == "engineer"
+                and u.order == "idle" and u.inside is None and not u.retreat]
+        if not idle:
+            return None
+        worker = min(idle, key=lambda u: (u.x - building.x) ** 2 + (u.y - building.y) ** 2)
+        worker.order_construct(self, building)
+        return worker
+
+    def _staff_foundations(self):
+        """Foundations nobody is working on get the next engineer to go idle."""
+        busy = {id(u.target) for u in self.units if u.order == "construct"}
+        for b in self.buildings:
+            if not b.complete and b.alive and id(b) not in busy:
+                worker = self.assign_builder(b)
+                if worker:
+                    log.debug("%s: %s #%d picks up the unattended %s at %s", self.clock(), worker.name,
+                              worker.id, b.name, (b.tx, b.ty))
 
     def _push_out(self, structure):
         rect = structure.tile_rect()

@@ -145,6 +145,8 @@ WEAPONS = {
                        desc="The all-round tank gun."),
 }
 
+BULLET_SPREAD = 2.5   # px of extra scatter at the far end of every bullet's path (visual)
+
 # Stats a weapon contributes to its unit (see modules.compute_stats).
 WEAPON_STATS = ("damage", "cooldown", "range", "accuracy", "burst", "vs_vehicle")
 
@@ -191,12 +193,16 @@ def fire(game, shooter, target, mult=1.0, origin=None):
 
 
 def _fire_bullet(game, shooter, target, w, mult, start, hit, miss):
+    rng = game.rng
     if hit:
-        end = (target.x + game.rng.uniform(-2, 2), target.y - 3 + game.rng.uniform(-2, 2))
+        end = (target.x + rng.uniform(-3, 3), target.y - 3 + rng.uniform(-3, 3))
     else:
         end = (target.x + miss[0], target.y + miss[1])
         game.particles.append([end[0], end[1], 0, -15, 0.25, (200, 176, 130), 1.0])
-    game.tracers.append([start[0], start[1], end[0], end[1], 0.0])
+    # Rounds leave the muzzle on slightly different lines, so a burst fans out.
+    end = (end[0] + rng.uniform(-BULLET_SPREAD, BULLET_SPREAD),
+           end[1] + rng.uniform(-BULLET_SPREAD, BULLET_SPREAD) * 0.6)
+    game.tracers.append([start[0], start[1], end[0], end[1], 0.0, rng.random()])
     if w["pin_per_round"] and target.is_unit:
         # Rounds snapping past keep heads down whether or not they hit.
         target.suppress(SUPPRESS_PER_SHOT + shooter.damage, (shooter.x, shooter.y))

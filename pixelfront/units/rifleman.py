@@ -1,7 +1,7 @@
 """Rifleman: the all-round infantryman."""
 
 UNIT = dict(
-    name="Rifleman", cls="infantry", hotkey="r", desc="All-round infantry.",
+    name="Rifleman", cls="infantry", desc="All-round infantry.",
     hp=55, armor=0, speed=40, sight=6,
     cost=60, time=8, supply=1, radius=4, height=13,
     # Weapon tiers: Light, Medium (default), Heavy. Each entry is a weapon id (weapons.py) plus
