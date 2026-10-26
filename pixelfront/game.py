@@ -1,15 +1,23 @@
 """Simulation state: entities, economy, capture points, combat and win conditions."""
+import logging
 import math
 import random
 from collections import deque
 
 from .config import (TILE, PLAYER, ENEMY, NEUTRAL, UNITS, BUILDINGS, START_CREDITS, SUPPLY_CAP,
                      BASE_INCOME, POINT_INCOME, CAPTURE_TIME, CAPTURE_RADIUS, MAX_CAPTURERS,
-                     SUPPRESS_PER_SHOT, SUPPRESS_EXPLOSIVE, SUPPRESS_RADIUS, PRONE_BULLET_DAMAGE, PRONE_ACCURACY)
+                     SUPPRESS_PER_SHOT, SUPPRESS_EXPLOSIVE, SUPPRESS_RADIUS, PRONE_TARGET_HIT, PRONE_ACCURACY,
+                     BUILD_GRID, GRID_OFFSET, SANDBOX_BUILD_SPEED)
 from .entities import Unit, Building, CapturePoint, Projectile, dist_point_rect
 
+log = logging.getLogger(__name__)
+TEAM_NAMES = {PLAYER: "player", ENEMY: "enemy", NEUTRAL: "neutral"}
+
 BOOM_TIME = 0.35  # seconds an explosion flash lasts
-from .modules import default_loadout, loadout_cost, loadout_time
+YIELD_SPEED = 45  # px/s a soldier sidesteps out of a vehicle's way
+TEST_TARGET_SPACING = 2          # tiles between test-range targets
+TEST_TARGET_OFFSET = (17, 13)    # tiles from the player's Command Center to the targets (~21 away)
+from .modules import default_loadout, loadout_cost, loadout_time, loadout_summary
 from .world import generate
 from .fog import Fog
 from .ai import AI
@@ -39,6 +47,9 @@ class Game:
         self.seed = seed if seed is not None else random.randrange(1 << 30)
         self.rng = random.Random(self.seed)
         self.world, bases, points = generate(self.rng)
+        log.info("New %s: seed %d, map %dx%d, bases at %s and %s, %d derricks",
+                 "test range" if sandbox else "match", self.seed, self.world.w, self.world.h,
+                 bases[0], bases[1], len(points))
         self.entities = []
         self.units, self.buildings, self.points = [], [], []
         self.projectiles = []
@@ -50,6 +61,7 @@ class Game:
         self.teams = {PLAYER: Team(PLAYER, START_CREDITS), ENEMY: Team(ENEMY, START_CREDITS)}
         self.time = 0.0
         self.winner = None
+        self.build_speed = SANDBOX_BUILD_SPEED if sandbox else 1.0   # test range builds faster
         self.last_alert = -99.0
         self.alert_pos = None
         self.fog = Fog(self.world)
@@ -71,7 +83,7 @@ class Game:
             self.teams[PLAYER].credits = 5000
             cc = self.buildings[0]
             helper = AI(self, PLAYER)   # borrow the AI's site finder to lay out the base
-            for kind in ("barracks", "yard"):
+            for kind in ("barracks", "yard", "bunker"):
                 spot = helper.find_spot(kind, cc)
                 if spot:
                     self.add(Building(kind, PLAYER, *spot))
@@ -87,14 +99,35 @@ class Game:
         """Passive enemy dummies near the player's base, one of each kind plus loadout variants."""
         cc = next(b for b in self.buildings if b.team == PLAYER)
         cx, cy = cc.center_tile()
-        spots = self.formation(cx + 8, cy + 6, len(TEST_TARGETS))
-        for (kind, lo), (tx, ty) in zip(TEST_TARGETS, spots):
+        # Well out of sight and range of the starting units, so nothing fires until you send it.
+        # The riflemen stand packed together (for splash and suppression tests); the rest spread out.
+        ox, oy = cx + TEST_TARGET_OFFSET[0], cy + TEST_TARGET_OFFSET[1]
+        packed = [t for t in TEST_TARGETS if t[0] == "rifleman"]
+        spread = [t for t in TEST_TARGETS if t[0] != "rifleman"]
+        spots = self.spread_spots(ox, oy, len(spread), TEST_TARGET_SPACING)
+        taken = set(spots)
+        squad = [p for p in self.formation(ox, oy - 5, len(packed) + len(taken)) if p not in taken]
+        for (kind, lo), (tx, ty) in zip(spread + packed, spots + squad[:len(packed)]):
             u = self.add(Unit(kind, ENEMY, tx * TILE + TILE / 2, ty * TILE + TILE / 2,
                               dict(default_loadout(kind), **lo)))
             u.passive = True
             u.facing = 180.0
         self.refresh()
         self.notify(PLAYER, "Test targets deployed")
+
+    def spread_spots(self, tx, ty, n, gap):
+        """n walkable, unoccupied tiles on a grid `gap` tiles apart, spiralling out from (tx, ty)."""
+        taken = {u.tile() for u in self.units}
+        out = []
+        for r in range(0, 12):
+            ring = [(tx + i * gap, ty + j * gap) for j in range(-r, r + 1) for i in range(-r, r + 1)
+                    if max(abs(i), abs(j)) == r]
+            for p in ring:
+                if self.world.walkable(*p) and p not in taken:
+                    out.append(p)
+                    if len(out) == n:
+                        return out
+        return out + self.formation(tx, ty, n - len(out))   # crowded map: fall back to packing in
 
     # ---- bookkeeping ------------------------------------------------------
 
@@ -116,15 +149,22 @@ class Game:
         for b in self.buildings:
             t = self.teams[b.team]
             t.supply_used += sum(UNITS[item["kind"]]["supply"] for item in b.queue)
+            t.supply_used += sum(u.supply for u in b.occupants)
             if b.kind == "command" and b.complete:
                 t.income += BASE_INCOME
         for p in self.points:
             if p.team != NEUTRAL:
                 self.teams[p.team].income += POINT_INCOME
 
+    def clock(self):
+        """Game time as m:ss, for log lines."""
+        t = int(self.time)
+        return f"{t // 60}:{t % 60:02d}"
+
     def notify(self, team, text):
         if team != PLAYER:
             return
+        log.debug("%s: message to player: %s", self.clock(), text)
         if self.messages and self.messages[-1][0] == text:
             self.messages[-1][1] = self.time
             return
@@ -193,6 +233,9 @@ class Game:
                 self.winner = ENEMY
             elif ENEMY not in alive:
                 self.winner = PLAYER
+            if self.winner is not None:
+                log.info("%s: %s wins (all %s buildings destroyed)", self.clock(), TEAM_NAMES[self.winner],
+                         TEAM_NAMES[ENEMY if self.winner == PLAYER else PLAYER])
 
     def _update_points(self, dt):
         for p in self.points:
@@ -219,6 +262,8 @@ class Game:
                     if p.team != NEUTRAL:
                         lost = p.team
                         p.team = NEUTRAL
+                        log.info("%s: derrick at %s neutralised by %s", self.clock(), p.center_tile(),
+                                 TEAM_NAMES[team])
                         self.notify(lost, "Derrick lost")
             else:
                 p.capturer = team
@@ -226,6 +271,7 @@ class Game:
                 if p.progress >= 1.0:
                     p.progress = 1.0
                     p.team = team
+                    log.info("%s: derrick at %s captured by %s", self.clock(), p.center_tile(), TEAM_NAMES[team])
                     self.notify(team, "Derrick captured")
 
     def _separate(self, dt):
@@ -251,8 +297,34 @@ class Game:
                     d = math.sqrt(d2)
                     ux, uy = dx / d, dy / d
                 push = (need - d) * 0.5 * k
+                veh = a if a.is_vehicle else b if b.is_vehicle else None
+                if veh is not None and veh.moving and (a.is_infantry or b.is_infantry):
+                    # Infantry give way to a moving vehicle; it doesn't get shoved by soldiers.
+                    # (A parked vehicle shares the push, so soldiers can squeeze past it.)
+                    if a is veh:
+                        self._nudge(b, ux * push * 2, uy * push * 2)
+                    else:
+                        self._nudge(a, -ux * push * 2, -uy * push * 2)
+                    continue
                 self._nudge(a, -ux * push, -uy * push)
                 self._nudge(b, ux * push, uy * push)
+
+        # Soldiers standing in a moving vehicle's path step aside before it reaches them.
+        for v in us:
+            if not (v.is_vehicle and v.moving):
+                continue
+            a = math.radians(v.facing)
+            fx, fy = math.cos(a), math.sin(a)
+            reach = v.radius + 14
+            for u in us:
+                if u.is_vehicle:
+                    continue
+                dx, dy = u.x - v.x, u.y - v.y
+                ahead = dx * fx + dy * fy
+                side = -dx * fy + dy * fx
+                if 0 < ahead < reach and abs(side) < v.radius + u.radius + 2:
+                    s = 1 if side >= 0 else -1
+                    self._nudge(u, -fy * s * YIELD_SPEED * dt, fx * s * YIELD_SPEED * dt)
 
     def _nudge(self, u, dx, dy):
         if self.world.walkable_px(u.x + dx, u.y + dy):
@@ -333,9 +405,25 @@ class Game:
         return out
 
     def can_place(self, kind, tx, ty, team=None):
+        """Buildings sit on the build grid, on clear ground, with a tile of clearance from any
+        other structure, so there are always lanes for units to move through."""
         s = BUILDINGS[kind]["size"]
-        return all(self.placeable_tile(x, y, team)
-                   for y in range(ty, ty + s) for x in range(tx, tx + s))
+        if (tx - GRID_OFFSET) % BUILD_GRID or (ty - GRID_OFFSET) % BUILD_GRID:
+            return False
+        if not all(self.placeable_tile(x, y, team) for y in range(ty, ty + s) for x in range(tx, tx + s)):
+            return False
+        w = self.world
+        for y in range(ty - 1, ty + s + 1):
+            for x in range(tx - 1, tx + s + 1):
+                if w.in_bounds(x, y) and w.occupant[y * w.w + x] is not None:
+                    return False
+        return True
+
+    @staticmethod
+    def snap_to_grid(tx, ty):
+        """Nearest build-grid origin to a tile position."""
+        snap = lambda v: int(round((v - GRID_OFFSET) / BUILD_GRID)) * BUILD_GRID + GRID_OFFSET
+        return snap(tx), snap(ty)
 
     def placeable_tile(self, x, y, team=None):
         if not self.world.buildable(x, y):
@@ -372,6 +460,8 @@ class Game:
         team.credits -= cost
         team.supply_used += UNITS[kind]["supply"]
         building.queue.append(dict(kind=kind, loadout=loadout, cost=cost, time=loadout_time(kind, loadout)))
+        log.info("%s: %s queued %s at %s (%s) for %d credits", self.clock(), TEAM_NAMES[building.team],
+                 kind, building.name, loadout_summary(kind, loadout), cost)
         return True
 
     def cancel_train(self, building, index):
@@ -381,6 +471,8 @@ class Game:
             if index == 0:
                 building.prod_timer = 0.0
             self.refresh()
+            log.info("%s: %s cancelled %s at %s (refund %d)", self.clock(), TEAM_NAMES[building.team],
+                     item["kind"], building.name, item["cost"])
 
     def cancel_construction(self, building):
         if building.alive and not building.complete:
@@ -388,6 +480,8 @@ class Game:
             building.alive = False
             self.world.vacate(building)
             self.puff(building.x, building.y, (190, 160, 110), 12, 40)
+            log.info("%s: %s cancelled construction of %s at %s", self.clock(), TEAM_NAMES[building.team],
+                     building.name, (building.tx, building.ty))
 
     def start_construction(self, worker):
         kind, tx, ty = worker.build_plan
@@ -395,9 +489,12 @@ class Game:
         if not self.can_place(kind, tx, ty):
             self.refund(worker.team, BUILDINGS[kind]["cost"])
             self.notify(worker.team, "Can't build there")
+            log.info("%s: %s could not start %s at %s (site blocked), refunded", self.clock(),
+                     TEAM_NAMES[worker.team], kind, (tx, ty))
             worker.stop(self)
             return
         b = self.add(Building(kind, worker.team, tx, ty, complete=False))
+        log.info("%s: %s started building %s at %s", self.clock(), TEAM_NAMES[worker.team], b.name, (tx, ty))
         self._push_out(b)
         worker.order_construct(self, b)
 
@@ -424,21 +521,26 @@ class Game:
             u.order_move(self, *self.formation(*dest, 1)[0])
         if announce:
             self.notify(building.team, f"{u.name} ready")
+            log.info("%s: %s %s ready at %s (#%d, %s)", self.clock(), TEAM_NAMES[u.team], u.name,
+                     building.name, u.id, loadout_summary(kind, u.loadout))
         return u
 
     # ---- combat -----------------------------------------------------------
 
-    def attack(self, attacker, target):
-        """Fire one shot. Accuracy decides whether it hits; misses land somewhere nearby."""
-        amount = attacker.damage * (attacker.vs_vehicle if target.is_vehicle else 1.0)
+    def attack(self, attacker, target, mult=1.0, origin=None):
+        """Fire one shot. Accuracy decides whether it hits; misses land somewhere nearby.
+        mult scales damage (garrison bonus); origin overrides where the shot starts."""
+        amount = attacker.damage * mult * (attacker.vs_vehicle if target.is_vehicle else 1.0)
         accuracy = attacker.accuracy * (PRONE_ACCURACY if attacker.suppressed else 1.0)
+        if target.is_unit and target.suppressed:
+            accuracy *= PRONE_TARGET_HIT   # a soldier hugging the dirt is a small target
         hit = self.rng.random() < accuracy
         miss = None
         if not hit:
             spread = 6 + (1 - accuracy) * 30
             ang = self.rng.uniform(0, math.tau)
             miss = (math.cos(ang) * spread, math.sin(ang) * spread * 0.6)
-        start = attacker.muzzle_pos()
+        start = origin or attacker.muzzle_pos()
         if attacker.weapon == "bullet":
             if hit:
                 end = (target.x + self.rng.uniform(-2, 2), target.y - 3 + self.rng.uniform(-2, 2))
@@ -450,9 +552,43 @@ class Game:
             if target.is_unit:
                 target.suppress(SUPPRESS_PER_SHOT + attacker.damage)
             if hit:
-                self.damage(target, amount, attacker, bullet=True)
+                self.damage(target, amount, attacker)
         else:
-            self.projectiles.append(Projectile(attacker, target, attacker.damage, attacker.weapon, start, miss))
+            self.projectiles.append(Projectile(attacker, target, attacker.damage * mult, attacker.weapon,
+                                               start, miss))
+
+    def enter(self, unit, bunker):
+        """A soldier climbs into a bunker: off the map until unloaded or the bunker falls."""
+        if len(bunker.occupants) >= bunker.capacity:
+            self.notify(unit.team, "Bunker is full")
+            return False
+        unit.order = "idle"
+        unit.path = []
+        unit.target = None
+        unit.suppressed = False
+        unit.suppression = 0.0
+        unit.kneel = 0.0
+        unit.inside = bunker
+        bunker.occupants.append(unit)
+        if unit in self.entities:
+            self.entities.remove(unit)
+        log.info("%s: %s %s #%d entered the bunker at %s (%d/%d)", self.clock(), TEAM_NAMES[unit.team],
+                 unit.name, unit.id, (bunker.tx, bunker.ty), len(bunker.occupants), bunker.capacity)
+        return True
+
+    def unload(self, bunker):
+        """Everyone out, onto open tiles around the bunker."""
+        if bunker.occupants:
+            log.info("%s: %d soldiers left the bunker at %s%s", self.clock(), len(bunker.occupants),
+                     (bunker.tx, bunker.ty), "" if bunker.alive else " as it fell")
+        for u in bunker.occupants:
+            tx, ty = self.free_tile_near(bunker.tile_rect())
+            u.x, u.y = tx * TILE + TILE / 2, ty * TILE + TILE / 2
+            u.inside = None
+            u.target = None
+            self.add(u)
+            self.refresh()
+        bunker.occupants = []
 
     def blast(self, x, y, radius=SUPPRESS_RADIUS):
         """Explosions pin down any infantry close by."""
@@ -475,12 +611,10 @@ class Game:
         """An explosion flash for the renderer to draw."""
         self.booms.append([x, y, self.time, r])
 
-    def damage(self, target, amount, attacker=None, bullet=False):
+    def damage(self, target, amount, attacker=None):
         if not target.alive or target.team == NEUTRAL:
             return
         dmg = max(1, amount - target.armor) * self.rng.uniform(0.8, 1.0)
-        if bullet and target.is_unit and target.suppressed:
-            dmg *= PRONE_BULLET_DAMAGE  # hugging the dirt
         target.hp -= dmg
         target.flash = 0.08
         self.puff(target.x, target.y - 3, (255, 230, 160), 2, 30)
@@ -502,12 +636,17 @@ class Game:
                     u.target = attacker
                     u.repath = 0.0
         if target.hp <= 0:
-            self.kill(target)
+            self.kill(target, attacker)
 
-    def kill(self, e):
+    def kill(self, e, killer=None):
         if not e.alive:
             return
         e.alive = False
+        by = f" by {TEAM_NAMES[killer.team]} {killer.name} #{killer.id}" if killer is not None else ""
+        if e.is_unit:
+            log.info("%s: %s %s #%d killed%s", self.clock(), TEAM_NAMES[e.team], e.name, e.id, by)
+        elif e.is_building:
+            log.info("%s: %s %s at %s destroyed%s", self.clock(), TEAM_NAMES[e.team], e.name, (e.tx, e.ty), by)
         if e.is_unit:
             if e.build_plan:
                 self.refund(e.team, BUILDINGS[e.build_plan[0]]["cost"])
@@ -526,6 +665,8 @@ class Game:
                 self.puff(e.x, e.y - 4, (170, 30, 30), 6, 35)
             return
         self.world.vacate(e)
+        if e.is_building and e.occupants:
+            self.unload(e)   # the garrison scrambles out of the ruins
         stones = [(self.rng.randrange(e.size * TILE - 4), self.rng.randrange(e.size * TILE - 4),
                    self.rng.choice(((96, 92, 90), (130, 120, 104), (70, 66, 64))))
                   for _ in range(e.size * 10)]

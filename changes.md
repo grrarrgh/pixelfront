@@ -2,6 +2,73 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.8.0 "Paper Trail" (2026-10-26)
+
+Every run now writes a log file.
+
+### Added
+
+- Logging. Each run writes `logs/YYYYMMDD_HHMMSS.log`, named year first so the files sort in order. The folder sits next to `Pixelfront.exe`, or in the project folder when running from source. The newest 50 logs are kept.
+- What gets logged:
+  - Startup: version, Python, pygame and display details.
+  - Screen changes and fullscreen toggles.
+  - Each match's seed and mode, and the result with the player's remaining forces.
+  - Units queued and ready, with their loadouts.
+  - Buildings placed, started, completed, cancelled and destroyed.
+  - Units killed, and by whom.
+  - Derricks captured and neutralised.
+  - Bunkers manned and emptied.
+  - Unit design changes.
+  - AI decisions: what it builds, attack waves with their makeup, base defence starting and ending.
+  - Slow frames, and any crash with its full traceback.
+- Set the environment variable `PIXELFRONT_DEBUG=1` for extra detail: player orders, control groups, AI capture assignments and redesigns, soldiers getting pinned down.
+- The game now reports its version (0.8.0).
+
+## 0.7.0 "Hold the Line" (2026-10-26)
+
+Bunkers to man, engineers who work together, idle animations and a set of fixes.
+
+### Added
+
+- Bunker: a 2×2 concrete pillbox that engineers can build (K). Right-click it with infantry to man it, up to 4 soldiers. While inside, each soldier fires from the bunker with 25% faster reloads and +10% damage and range, and slowly heals (1 HP per second, always slower than a medic). Helmets show in the firing slits when it's manned. The bunker takes the hits; if it's destroyed, the garrison scrambles out. Select it and press U to unload. The test range now starts with one.
+- Several engineers can build together: place a building with more than one engineer selected and the nearest one lays the foundation while the rest go and help. Several engineers can also repair or construct the same building.
+- Tooltips on build and train buttons show the build time.
+- Idle animations: soldiers breathe (a slight rise and fall of the upper body, out of step with each other), and vehicles shake gently with the engine running.
+
+### Changed
+
+- Heavier weapon tiers never reload faster than lighter ones. The rifleman's machine gun, which had been reloading faster than the rifle, now fires bursts of 4 rounds per reload instead. The heavy infantry's M60 works the same way. A check flags any unit whose weapon tiers break this rule.
+- Design screen stats include Burst for machine guns.
+- Test range targets now stand well away from your base (about 12–15 tiles), so nothing fires until you send units in. The riflemen are packed together as a squad, for testing splash weapons and suppression; the other targets are spread two tiles apart.
+
+### Fixed
+
+- Oil derricks no longer jitter: every pump frame is drawn on the same canvas, so only the beam and horse head move.
+
+## 0.6.0 "Radar & Rumble" (2026-10-26)
+
+A radar, base layout on a grid, steering vehicles that infantry make way for, and clearer unit markings.
+
+### Added
+
+- Radar in the top-right corner: the map in radar green with a grid and a rotating sweep. It shows fog of war, your units as green blips and visible enemies as pulsing red blips, plus buildings and derricks. Click or drag on it to move the camera; right-click to issue orders there.
+- Buildings snap to an invisible 4-tile grid and must keep a tile of clearance from other structures, leaving lanes for infantry and vehicles. The AI follows the same rules.
+- Vehicles turn their hull at a realistic rate instead of snapping round, and front wheels steer into the turn. On half-tracks the steering wheels are bigger, with a light rim and a mudguard. The 155mm artillery tank now has to swing round before it can fire.
+- Infantry get out of the way of moving vehicles: they step aside before the vehicle reaches them and are pushed clear rather than blocking it.
+- Oil derricks pump continuously, and the owner's flag flies on a pole centred above the pump.
+- Buildings cast a ground shadow and have a weathered surface texture.
+- The sprite motion test shows vehicles driving in a circle with their wheels steered.
+
+### Changed
+
+- Light-armour infantry wear team bandanas on both arms.
+- Medics: the red crosses sit on white patches, and both shoulders carry a white patch with a red centre.
+- Engineers always have yellow and light-grey patches on top of both shoulders.
+- The Barracks is smaller: a 2×2 building.
+- The test range builds and trains 10 times faster.
+- Prone soldiers are harder to hit (half the chance) instead of taking reduced bullet damage.
+- Prone soldiers crawl at 60% speed (40% slower), up from 35%.
+
 ## 0.5.0 "Heavy Metal" (2026-10-26)
 
 Real weapons for heavy infantry, jeeps and tanks, turrets that traverse, and new firing stances.

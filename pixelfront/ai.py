@@ -1,9 +1,12 @@
 """Computer opponent: grabs derricks, builds an army with varied loadouts and attacks in waves."""
+import logging
 import math
 import random
 
 from .config import TILE, BUILDINGS, CAPTURE_RADIUS
-from .modules import slots_for, tiers, default_loadout
+from .modules import slots_for, tiers, default_loadout, loadout_summary
+
+log = logging.getLogger(__name__)
 
 ARMY_MIX = {"barracks": [("rifleman", 5), ("heavy", 2), ("medic", 1)],
             "yard": [("jeep", 2), ("tank", 3)]}
@@ -18,6 +21,7 @@ class AI:
         self.first_wave_at = first_wave_at
         self.rng = random.Random(game.rng.random())
         self.claims = {}  # unit id -> capture point it was sent to
+        self.defending = False   # remembered so the log only notes when a defence starts/ends
 
     def update(self, dt):
         self.timer -= dt
@@ -69,6 +73,12 @@ class AI:
 
         threat = next((u for u in g.units if u.team != self.team
                        and math.hypot(u.x - base.x, u.y - base.y) < 14 * TILE), None)
+        if bool(threat) != self.defending:
+            self.defending = bool(threat)
+            if threat:
+                log.info("%s: AI defending its base against %s #%d", g.clock(), threat.name, threat.id)
+            else:
+                log.info("%s: AI base threat cleared", g.clock())
         if threat:
             for s in army:
                 if s.order in ("idle", "move") and s.armed:
@@ -81,6 +91,12 @@ class AI:
             target = self.pick_target(base)
             if target:
                 g.command_move(idle_army, *target.center_tile(), attack=True)
+                mix = {}
+                for u in idle_army:
+                    mix[u.kind] = mix.get(u.kind, 0) + 1
+                log.info("%s: AI attack wave of %d (%s) sent at %s %s; next wave size %d", g.clock(),
+                         len(idle_army), ", ".join(f"{n} {k}" for k, n in sorted(mix.items())),
+                         target.name, (target.tx, target.ty), min(16, self.wave + 2))
                 self.wave = min(16, self.wave + 2)
                 idle = [u for u in idle if u.kind == "engineer"]
         self.send_capturers(idle, base)
@@ -113,6 +129,7 @@ class AI:
             p = min(cands, key=lambda p: math.hypot(p.x - u.x, p.y - u.y) + 0.5 * math.hypot(p.x - base.x, p.y - base.y))
             heading[p.id] = heading.get(p.id, 0) + 1
             self.claims[u.id] = p
+            log.debug("%s: AI sends %s #%d to capture the derrick at %s", g.clock(), u.name, u.id, p.center_tile())
             g.command_move([u], *p.center_tile(), attack=u.armed)
 
     def redesign(self, kind):
@@ -123,6 +140,7 @@ class AI:
             for slot in slots_for(kind):
                 if self.rng.random() < 0.5:
                     designs[kind][slot] = self.rng.randrange(len(tiers(kind, slot)))
+            log.debug("AI redesigned %s: %s", kind, loadout_summary(kind, designs[kind]))
 
     def pick_target(self, base):
         enemies = [b for b in self.game.buildings if b.team != self.team]
@@ -137,25 +155,29 @@ class AI:
             return
         spot = self.find_spot(kind, base)
         if spot is None:
+            log.warning("%s: AI found nowhere to build a %s near %s", g.clock(), kind, (base.tx, base.ty))
             return
         g.teams[self.team].credits -= BUILDINGS[kind]["cost"]
         sx, sy = spot[0] * TILE, spot[1] * TILE
         worker = min(cands, key=lambda w: (w.x - sx) ** 2 + (w.y - sy) ** 2)
         self.claims.pop(worker.id, None)
+        log.info("%s: AI orders a %s at %s (engineer #%d)", g.clock(), kind, spot, worker.id)
         worker.order_build(g, kind, *spot)
 
     def find_spot(self, kind, base):
-        """A buildable site near the base with a free margin around it."""
+        """A legal build-grid site near the base whose surroundings are open ground."""
         g = self.game
         s = BUILDINGS[kind]["size"]
         cx, cy = base.center_tile()
-        for r in range(4, 16):
+        for r in range(2, 16):
             ring = [(x, y) for y in range(cy - r, cy + r + 1) for x in range(cx - r, cx + r + 1)
                     if max(abs(x - cx), abs(y - cy)) == r]
             self.rng.shuffle(ring)
             for x, y in ring:
-                tx, ty = x - s // 2, y - s // 2
-                if all(g.world.buildable(xx, yy)
-                       for yy in range(ty - 1, ty + s + 1) for xx in range(tx - 1, tx + s + 1)):
+                tx, ty = g.snap_to_grid(x - s / 2, y - s / 2)
+                if g.can_place(kind, tx, ty) and all(
+                        g.world.buildable(xx, yy) or g.world.occupant[yy * g.world.w + xx] is not None
+                        for yy in range(ty - 1, ty + s + 1) for xx in range(tx - 1, tx + s + 1)
+                        if g.world.in_bounds(xx, yy)):
                     return tx, ty
         return None

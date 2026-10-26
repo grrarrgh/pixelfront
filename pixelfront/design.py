@@ -1,10 +1,15 @@
 """Unit design screen: pick each unit type's loadout before training it."""
+import logging
+
 import pygame
 
 from .config import SCREEN_W, VIEW_H, PLAYER, UNITS, TEAM_COLORS
 from .font import draw_text, text_width
 from .modules import (slots_for, slot_label, tiers, compute_stats, base_stats, loadout_cost,
-                      loadout_time, tier, tier_effects, format_stat, STAT_NAMES, LOWER_IS_BETTER)
+                      loadout_time, tier, tier_effects, format_stat, STAT_NAMES, LOWER_IS_BETTER,
+                      loadout_summary)
+
+log = logging.getLogger(__name__)
 from .sprites import K
 
 PANEL = pygame.Rect(12, 14, SCREEN_W - 24, VIEW_H - 18)
@@ -81,8 +86,11 @@ class DesignScreen:
             if self.close_rect().collidepoint(ev.pos):
                 return "close"
             for kind, slot, lv, r in self.buttons():
-                if r.collidepoint(ev.pos):
+                if r.collidepoint(ev.pos) and self.designs[kind][slot] != lv:
                     self.designs[kind][slot] = lv
+                    log.info("Design: %s %s -> %s (now %s, %d credits)", kind, slot_label(kind, slot),
+                             tier(kind, slot, lv)["name"], loadout_summary(kind, self.designs[kind]),
+                             loadout_cost(kind, self.designs[kind]))
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
             return "close"
         return None

@@ -1,5 +1,7 @@
 """Window, main loop and screen states (title, playing, paused, game over)."""
+import logging
 import random
+import time
 
 import pygame
 
@@ -31,6 +33,9 @@ CONTROLS = [
     ("Esc", "Cancel / menu"),
 ]
 
+log = logging.getLogger(__name__)
+SLOW_FRAME = 0.1   # seconds; frames slower than this are logged (at most every few seconds)
+
 
 class App:
     def __init__(self):
@@ -39,8 +44,13 @@ class App:
         try:
             self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.SCALED, vsync=1)
         except pygame.error:
+            log.warning("vsync unavailable, running without it")
             self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.SCALED)
+        log.info("Display: logical %dx%d, window %s, driver %s", SCREEN_W, SCREEN_H,
+                 pygame.display.get_window_size(), pygame.display.get_driver())
+        t0 = time.perf_counter()
         self.sprites = Sprites()
+        log.info("Sprites ready in %.0f ms", (time.perf_counter() - t0) * 1000)
         pygame.display.set_icon(self.sprites.window_icon())
         pygame.mouse.set_visible(False)
         self.clock = pygame.time.Clock()
@@ -51,12 +61,26 @@ class App:
         self.title_bg = render_terrain(world, 3)
         self.game = None
         self.design = None
+        self._last_slow_log = -99.0
+
+    @property
+    def state(self):
+        return self._state
+
+    @state.setter
+    def state(self, value):
+        if value != getattr(self, "_state", None):
+            log.info("Screen: %s -> %s", getattr(self, "_state", None), value)
+        self._state = value
 
     def start_game(self, sandbox=False):
+        t0 = time.perf_counter()
         self.game = Game(sandbox=sandbox)
         self.renderer = Renderer(self.game, self.sprites)
         self.hud = HUD(self.game, self.sprites)
         self.ctrl = Controller(self.game, self.hud)
+        log.info("%s started (seed %d) in %.0f ms", "Test range" if sandbox else "Match",
+                 self.game.seed, (time.perf_counter() - t0) * 1000)
         self.state = "play"
 
     def open_design(self):
@@ -67,12 +91,17 @@ class App:
 
     def run(self):
         while self.running:
-            dt = min(self.clock.tick(FPS) / 1000.0, 0.05)
+            raw = self.clock.tick(FPS) / 1000.0
+            if raw > SLOW_FRAME and time.monotonic() - self._last_slow_log > 5:
+                self._last_slow_log = time.monotonic()
+                log.warning("Slow frame: %.0f ms on the %s screen", raw * 1000, self.state)
+            dt = min(raw, 0.05)
             for ev in pygame.event.get():
                 self.handle(ev)
             self.update(dt)
             self.draw()
             pygame.display.flip()
+        log.info("Window closed")
         pygame.quit()
 
     # ---- input ------------------------------------------------------------
@@ -83,6 +112,7 @@ class App:
             return
         if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F11:
             pygame.display.toggle_fullscreen()
+            log.info("Fullscreen toggled (window now %s)", pygame.display.get_window_size())
             return
         key = ev.key if ev.type == pygame.KEYDOWN else None
         if self.state == "title":
@@ -133,6 +163,12 @@ class App:
             self.ctrl.update(dt)
             self.game.update(dt)
             if self.game.winner is not None:
+                g = self.game
+                log.info("Match over after %d:%02d: %s. Player has %d units, %d buildings, %d credits",
+                         int(g.time) // 60, int(g.time) % 60,
+                         "VICTORY" if g.winner == PLAYER else "DEFEAT",
+                         sum(1 for u in g.units if u.team == PLAYER),
+                         sum(1 for b in g.buildings if b.team == PLAYER), int(g.teams[PLAYER].credits))
                 self.state = "over"
 
     # ---- drawing ----------------------------------------------------------

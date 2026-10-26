@@ -38,12 +38,28 @@ SUPPRESS_RADIUS = 20       # px around an explosion
 SUPPRESS_ON, SUPPRESS_OFF = 60, 20   # go prone at/above ON, get up below OFF
 SUPPRESS_DECAY = 20        # per second, once not shot at for SUPPRESS_CALM seconds
 SUPPRESS_CALM = 1.0
-PRONE_SPEED = 0.35         # speed multiplier while crawling
-PRONE_BULLET_DAMAGE = 0.5  # bullet damage multiplier while prone
+PRONE_SPEED = 0.6          # speed multiplier while crawling (40% slower)
+PRONE_TARGET_HIT = 0.5     # chance-to-hit multiplier for shots aimed at a prone soldier
 PRONE_ACCURACY = 0.75      # accuracy multiplier while pinned
 PRONE_RANGE = 0.6          # weapon range multiplier while firing prone
 
+BURST_GAP = 0.09           # seconds between rounds of a burst (machine guns)
+
+# Infantry manning a bunker: reload time x0.75, damage and range x1.1.
+GARRISON_RELOAD = 0.75
+GARRISON_DAMAGE = 1.1
+GARRISON_RANGE = 1.1
+GARRISON_HEAL = 1.0        # hp per second the bunker slowly restores to each soldier inside
+                           # (always well below a medic's rate)
+
 TURRET_SPEED = 160         # degrees per second a turret (or mounted gun) traverses
+HULL_TURN = {"jeep": 300, "tank": 140}   # degrees per second a vehicle hull turns
+STEER_MAX = 28             # how far front wheels turn into a bend, degrees
+
+# Buildings snap to an invisible grid and keep a tile of clearance, leaving lanes to move through.
+BUILD_GRID = 4
+GRID_OFFSET = 2            # grid lines fall on tiles where (tile - GRID_OFFSET) % BUILD_GRID == 0
+SANDBOX_BUILD_SPEED = 10   # the test range builds and trains this many times faster
 KNEEL_TIME = 0.5           # seconds heavy infantry take to kneel before they can fire
 
 # Base stats, before loadout modules (see modules.py). "cls" is infantry or vehicle.
@@ -76,9 +92,12 @@ BUILDINGS = {
     "command": dict(name="Command Center", size=3, hp=1500, armor=4, cost=500, time=60,
                     sight=8, trains=["engineer"], hotkey="c",
                     desc="Trains engineers. +1 credit/s."),
-    "barracks": dict(name="Barracks", size=3, hp=800, armor=3, cost=200, time=30,
+    "barracks": dict(name="Barracks", size=2, hp=800, armor=3, cost=200, time=30,
                      sight=6, trains=["rifleman", "medic", "heavy"], hotkey="b",
                      desc="Trains infantry."),
+    "bunker": dict(name="Bunker", size=2, hp=900, armor=5, cost=150, time=20,
+                   sight=7, trains=[], capacity=4, hotkey="k",
+                   desc="Man it with infantry: faster reloads, +10% damage and range."),
     "yard": dict(name="Vehicle Yard", size=3, hp=1000, armor=4, cost=300, time=40,
                  sight=6, trains=["jeep", "tank"], hotkey="y",
                  desc="Builds jeeps and tanks."),

@@ -48,14 +48,14 @@ UNIT_TIERS = {
              mul={"damage": 0.6, "range": 0.6, "cooldown": 0.8, "speed": 1.08},
              add={"accuracy": 0.12}, cost=-0.2, time=-0.1),
         dict(name="Medium", desc="Rifle: all-purpose."),
-        dict(name="Heavy", desc="Machine gun: huge firepower, inaccurate, heavy to carry.",
-             mul={"damage": 0.8, "cooldown": 0.3, "range": 1.1, "speed": 0.72},
-             add={"accuracy": -0.2}, cost=0.5, time=0.3),
+        dict(name="Heavy", desc="Machine gun: long bursts of fire, inaccurate, heavy to carry.",
+             mul={"damage": 0.8, "cooldown": 1.15, "range": 1.1, "speed": 0.72},
+             set={"burst": 4}, add={"accuracy": -0.2}, cost=0.5, time=0.3),
     ],
     # Weapon tiers that swap the weapon itself use `set` (applied before any mul/add).
     ("heavy", "weapon"): [
-        dict(name="Light", desc="M60 machine gun: rapid fire that pins infantry down; weak vs armour.",
-             set={"weapon": "bullet", "damage": 5, "cooldown": 0.3, "range": 70, "accuracy": 0.6,
+        dict(name="Light", desc="M60 machine gun: bursts of fire that pin infantry down; weak vs armour.",
+             set={"weapon": "bullet", "damage": 5, "cooldown": 1.0, "burst": 4, "range": 70, "accuracy": 0.6,
                   "vs_vehicle": 1.0}, cost=-0.1, time=-0.1),
         dict(name="Medium", desc="Grenade launcher: lobbed grenades that burst over a small area."),
         dict(name="Heavy", desc="Shoulder rocket launcher: slow to reload, devastating vs vehicles.",
@@ -92,10 +92,10 @@ UNIT_TIERS = {
 # Stat key -> display name. Stats a unit doesn't have (base value 0) are hidden for it.
 STAT_NAMES = {
     "hp": "HP", "armor": "Armor", "damage": "Damage", "heal": "Heal", "work": "Work rate",
-    "range": "Range", "cooldown": "Reload", "accuracy": "Accuracy", "speed": "Speed",
+    "range": "Range", "cooldown": "Reload", "burst": "Burst", "accuracy": "Accuracy", "speed": "Speed",
     "sight": "Sight", "vs_vehicle": "Vs vehicles",
 }
-STAT_DEFAULTS = {"heal": 0, "work": 0, "vs_vehicle": 1.0, "accuracy": 0.85}
+STAT_DEFAULTS = {"heal": 0, "work": 0, "vs_vehicle": 1.0, "accuracy": 0.85, "burst": 1}
 LOWER_IS_BETTER = {"cooldown"}
 
 
@@ -159,7 +159,27 @@ def loadout_summary(kind, loadout):
     return "  ".join(f"{slot_label(kind, s)} {tier(kind, s, lv)['name']}" for s, lv in loadout.items())
 
 
+def reload_order_problems():
+    """Heavier weapon tiers must never reload faster than lighter ones. Returns a list of
+    human-readable violations (empty when every unit's weapon tiers are in order)."""
+    problems = []
+    for kind in UNITS:
+        if "weapon" not in slots_for(kind):
+            continue
+        prev = None
+        for level, t in enumerate(tiers(kind, "weapon")):
+            lo = dict(default_loadout(kind), weapon=level)
+            reload_time = compute_stats(kind, lo)["cooldown"]
+            if prev is not None and reload_time < prev[1] - 1e-9:
+                problems.append(f"{kind}: {t['name']} reloads in {reload_time:.2f}s, "
+                                f"faster than {prev[0]} ({prev[1]:.2f}s)")
+            prev = (t["name"], reload_time)
+    return problems
+
+
 def format_stat(key, value):
+    if key == "burst":
+        return f"x{int(value)}"
     if key == "accuracy":
         return f"{value * 100:.0f}%"
     if key == "range":

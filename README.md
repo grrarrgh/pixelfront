@@ -19,6 +19,12 @@ python main.py
 
 This produces a single self-contained `dist\Pixelfront.exe`.
 
+## Logs
+
+Every run writes a log to `logs\YYYYMMDD_HHMMSS.log` (next to `Pixelfront.exe`, or in the project
+folder when running from source); the newest 50 are kept. Set `PIXELFRONT_DEBUG=1` before
+launching for extra detail such as individual orders.
+
 ## How to play
 
 Destroy every enemy building to win. Lose all of yours and it's over.
@@ -59,19 +65,26 @@ Units are trained with the design that was current when you queued them, and loo
 - **Infantry armour:** Light = no helmet or body armour (a team bandana on the arm), Medium =
   helmet and body armour, Heavy = adds shoulder, elbow and knee plates.
 - **Vehicle armour:** more plating, same size.
-- **Vehicle speed:** Fast = wheels, Normal = half-tracks, Slow = full tracks.
+- **Vehicle speed:** Fast = wheels, Normal = half-tracks, Slow = full tracks. Front wheels steer into turns.
+- **Markings:** medics carry red crosses on white patches, engineers yellow and grey shoulder patches.
+
+### Bunkers
+
+Engineers can build Bunkers. Right-click one with infantry to man it (up to 4). Soldiers inside
+fire from it with 25% faster reloads and +10% damage and range, and slowly heal, while the bunker takes the hits.
+If it falls, the garrison is thrown clear.
 
 ### Suppression
 
 Infantry under heavy fire, especially machine guns or nearby explosions, get pinned down. They
-go prone and crawl: slower, less accurate and at 60% range, but they take half damage from bullets. Medics and
+go prone and crawl at 60% speed, shooting less accurately and at 60% range, but they are only half as likely to be hit. Medics and
 engineers have to be touching whoever or whatever they heal, repair or build.
 
 ### Test range and motion test
 
 - **T** on the title screen: a sandbox with no AI, no fog, plenty of credits, a starter army, a
-  Command Center, Barracks and Vehicle Yard to train from, and passive enemy targets of every type
-  and loadout. **F5** respawns the targets.
+  Command Center, Barracks and Vehicle Yard to train from (building and training are 10x faster),
+  and passive enemy targets of every type and loadout. **F5** respawns the targets.
 - **M** on the title screen: the sprite motion test. Every unit loops through turning, moving,
   attacking, pinned-down and dying animations. **1/2/3** cycle the Armor, Weapon and Speed tiers,
   **Tab** switches team, **Space** pauses.
@@ -86,7 +99,8 @@ engineers have to be touching whoever or whatever they heal, repair or build.
 | Right click | Smart command: move, attack, capture a derrick, heal (medic), build/repair (engineer). With a building selected: set rally point |
 | `A` then click | Attack (click an enemy) or attack-move (click ground) |
 | `M` / `S` | Move / Stop |
-| Engineer: `R`, `C` / `B` / `Y` | Repair; build Command Center / Barracks / Vehicle Yard (Shift+click to place several) |
+| Engineer: `R`, `C` / `B` / `Y` / `K` | Repair; build Command Center / Barracks / Vehicle Yard / Bunker (Shift+click to place several; other selected engineers help build) |
+| Bunker: `U` | Unload the garrison (right-click a bunker with infantry to man it) |
 | Command Center: `E` | Train Engineer |
 | Barracks: `R` / `M` / `H` | Train Rifleman / Medic / Heavy Infantry |
 | Yard: `J` / `T` | Build Jeep / Tank |
@@ -117,6 +131,7 @@ engineers have to be touching whoever or whatever they heal, repair or build.
 | `pixelfront/motiontest.py` | Sprite motion test scene |
 | `pixelfront/controller.py` | Mouse/keyboard to orders |
 | `pixelfront/app.py` | Window, main loop, title/pause/design/game-over screens |
+| `pixelfront/log.py` | Per-run log files and crash logging |
 
 ### Adding a new module slot
 

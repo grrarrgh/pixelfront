@@ -116,6 +116,10 @@ class Renderer:
                 vis.append(e)
         vis.sort(key=lambda e: e.y if e.is_unit else e.rect()[3] - 8)
 
+        for e in vis:   # building shadows go down first, on the ground under everything
+            if e.is_building and e.complete:
+                view.blit(self.sp.building_shadow(e.kind, e.size), (e.tx * TILE - cx, e.ty * TILE - cy))
+
         for e in vis:
             if e in selected:
                 col = SEL_COLORS.get(e.team, ENEMY_SEL)
@@ -186,10 +190,10 @@ class Renderer:
         turret = u.turret - u.facing if u.has_turret else 0.0
         x, y = int(u.x) - cx, int(u.y) - cy
         draw_shadow(view, x, y, u.radius, u.is_infantry and u.suppressed)
-        img, (ox, oy) = spr.frame(anim, i, u.facing, turret)
+        img, (ox, oy) = spr.frame(anim, i, u.facing, turret, u.steer)
         view.blit(img, (x - ox, y - oy))
         if u.flash > 0:
-            fl, _ = spr.flash(anim, i, u.facing, turret)
+            fl, _ = spr.flash(anim, i, u.facing, turret, u.steer)
             view.blit(fl, (x - ox, y - oy))
 
     def draw_decal(self, view, d, cx, cy):
@@ -207,22 +211,27 @@ class Renderer:
 
     def draw_point(self, view, p, cx, cy):
         x, y = int(p.x) - cx, int(p.y) - cy
-        img, (ox, oy) = self.sp.derrick
+        img, (ox, oy) = self.sp.derrick(self.game.time)
         view.blit(img, (x - ox, y - oy))
+        # Owner's flag on a pole in the middle of the pad, flying clear above the pump.
         col = team_color(p.team)
-        pygame.draw.line(view, K, (x + 10, y - 20), (x + 10, y - 3))
-        pygame.draw.rect(view, col, (x + 11, y - 20, 6, 4))
-        pygame.draw.rect(view, K, (x + 11, y - 20, 6, 4), 1)
+        top = y - oy - 6
+        pygame.draw.line(view, K, (x - 1, top), (x - 1, y - 2))
+        pygame.draw.line(view, (190, 196, 206), (x, top), (x, y - 2))
+        wave = int(self.game.time * 4 + p.id) % 2
+        flag = [(x + 1, top), (x + 8, top + 1 + wave), (x + 8, top + 5 + wave), (x + 1, top + 5)]
+        pygame.draw.polygon(view, col, flag)
+        pygame.draw.polygon(view, K, flag, 1)
         capturing = p.progress < 1 and p.progress > 0
         if capturing or p.contested:
             team = p.capturer if p.team == NEUTRAL else p.team
             bar = (240, 220, 90) if p.contested else team_color(team)
-            hp_bar(view, x - 12, y - 27, 24, p.progress, bar)
+            hp_bar(view, x - 12, y - oy - 11, 24, p.progress, bar)
 
     def draw_building(self, view, e, cx, cy):
         l, t = e.tx * TILE - cx, e.ty * TILE - cy
         w = e.size * TILE
-        img, (ox, oy) = self.sp.building(e.kind, e.team, e.progress)
+        img, (ox, oy) = self.sp.building(e.kind, e.team, e.progress, bool(e.occupants))
         bx, by = int(e.x) - cx - ox, int(e.y) - cy - oy
         view.blit(img, (bx, by))
         if not e.complete:

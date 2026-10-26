@@ -1,11 +1,16 @@
 """Units, buildings, capture points and projectiles."""
+import logging
 import math
 
 from .config import (TILE, UNITS, BUILDINGS, NEUTRAL, INTERACT, REPAIR_RATE, POINT_SIGHT, PRONE_SPEED,
                      SUPPRESS_ON, SUPPRESS_OFF, SUPPRESS_DECAY, SUPPRESS_CALM, PRONE_RANGE,
-                     TURRET_SPEED, KNEEL_TIME)
+                     TURRET_SPEED, KNEEL_TIME, HULL_TURN, STEER_MAX, BURST_GAP,
+                     GARRISON_RELOAD, GARRISON_DAMAGE, GARRISON_RANGE, GARRISON_HEAL)
 from .modules import compute_stats, default_loadout
 from .pathfinding import find_path
+
+
+log = logging.getLogger(__name__)
 
 
 def dist_point_rect(px, py, rect):
@@ -86,25 +91,67 @@ class Building(Structure):
         self.queue = []  # dicts: kind, loadout, cost, time
         self.prod_timer = 0.0
         self.rally = None  # a tile (tx, ty) or a CapturePoint
+        self.capacity = st.get("capacity", 0)   # infantry it can hold (bunkers)
+        self.occupants = []
 
     def add_progress(self, game, dt):
-        inc = dt / self.stats["time"]
+        inc = dt * game.build_speed / self.stats["time"]
         self.progress = min(1.0, self.progress + inc)
         self.hp = min(self.max_hp, self.hp + self.max_hp * 0.9 * inc)
         if self.progress >= 1.0:
             self.complete = True
             game.notify(self.team, f"{self.name} complete")
+            log.info("%s: %s %s at %s complete", game.clock(), "player" if self.team == 0 else "enemy",
+                     self.name, (self.tx, self.ty))
 
     def update(self, game, dt):
         self.flash = max(0.0, self.flash - dt)
+        if self.complete and self.occupants:
+            self._man_the_walls(game, dt)
         if not self.complete or not self.queue:
             return
-        self.prod_timer += dt
+        self.prod_timer += dt * game.build_speed
         item = self.queue[0]
         if self.prod_timer >= item["time"]:
             self.prod_timer = 0.0
             self.queue.pop(0)
             game.spawn_unit(item["kind"], self, item["loadout"])
+
+    def _man_the_walls(self, game, dt):
+        """Garrisoned soldiers shoot from the bunker: faster reloads, more damage and range.
+        They also slowly patch themselves up while under cover."""
+        reach = self.size * TILE / 2
+        for u in self.occupants:
+            u.x, u.y = self.x, self.y
+            u.hp = min(u.max_hp, u.hp + GARRISON_HEAL * dt)
+            u.cooldown -= dt
+            u.lunge = max(0.0, u.lunge - dt)
+            if not u.armed:
+                continue
+            rng = u.range * GARRISON_RANGE + reach
+            t = u.target
+            if t is None or not t.alive or u.edge_dist(t) > rng:
+                t = u.target = game.find_enemy_near(u, rng)
+            if t is None:
+                u.burst_left = 0
+                continue
+            u.face(t.x, t.y)
+            if u.burst_left > 0:
+                u.burst_timer -= dt
+                if u.burst_timer <= 0:
+                    u.burst_left -= 1
+                    u.burst_timer = BURST_GAP
+                    game.attack(u, t, GARRISON_DAMAGE, self.firing_port(t))
+            elif u.cooldown <= 0:
+                u.cooldown = u.attack_time * GARRISON_RELOAD
+                u.lunge = 0.12
+                u.burst_left, u.burst_timer = u.burst - 1, BURST_GAP
+                game.attack(u, t, GARRISON_DAMAGE, self.firing_port(t))
+
+    def firing_port(self, target):
+        """Where shots leave the bunker: the slit facing the target."""
+        a = math.atan2(target.y - self.y, target.x - self.x)
+        return self.x + math.cos(a) * 9, self.y - 7 + math.sin(a) * 5
 
 
 class Unit(Entity):
@@ -132,7 +179,13 @@ class Unit(Entity):
         self.work = st["work"]
         self.vs_vehicle = st["vs_vehicle"]
         self.accuracy = st["accuracy"]
+        self.burst = max(1, int(st["burst"]))   # rounds per trigger pull (machine guns)
+        self.burst_left = 0
+        self.burst_timer = 0.0
         self.passive = False  # test-range targets never acquire or return fire
+        self.inside = None    # the bunker this soldier is manning, if any
+        self.assist = None    # (kind, tx, ty) of a building site this engineer is helping on
+        self.idle_t = 0.0     # drives the idle animation
         self.armed = self.damage > 0 and self.weapon is not None
 
         self.order = "idle"
@@ -162,6 +215,7 @@ class Unit(Entity):
         self.has_turret = self.is_vehicle and self.weapon != "artillery"
         self.turret = self.facing
         self.aiming = False
+        self.steer = 0.0          # front-wheel angle for the renderer (model degrees, + = left)
         # Heavy infantry kneel before firing; this counts up to KNEEL_TIME while they settle.
         self.kneel = 0.0
 
@@ -195,6 +249,11 @@ class Unit(Entity):
         """Turn the turret (or hull, for fixed guns) towards a point. Returns True once on target."""
         want = math.degrees(math.atan2(y - self.y, x - self.x)) % 360
         if not self.has_turret:
+            if self.is_vehicle:   # fixed gun: swing the whole hull round at its turn rate
+                diff = (want - self.facing + 180) % 360 - 180
+                step = HULL_TURN[self.kind] * dt
+                self.facing = (self.facing + max(-step, min(step, diff))) % 360
+                return abs(diff) <= 6
             self.face(x, y)
             return True
         diff = (want - self.turret + 180) % 360 - 180
@@ -213,8 +272,9 @@ class Unit(Entity):
             return
         self.suppression = min(100.0, self.suppression + amount)
         self.calm = SUPPRESS_CALM
-        if self.suppression >= SUPPRESS_ON:
+        if self.suppression >= SUPPRESS_ON and not self.suppressed:
             self.suppressed = True
+            log.debug("%s #%d (team %d) pinned down", self.name, self.id, self.team)
 
     def _update_suppression(self, dt):
         if self.calm > 0:
@@ -236,7 +296,8 @@ class Unit(Entity):
         if self.order == "build":
             return "Going to build " + BUILDINGS[self.build_plan[0]]["name"]
         return {"idle": "Idle", "move": "Moving", "amove": "Attack-moving", "attack": "Attacking",
-                "heal": "Healing", "repair": "Repairing", "construct": "Building"}[self.order]
+                "heal": "Healing", "repair": "Repairing", "construct": "Building",
+                "assist": "Helping to build", "garrison": "Heading for the bunker"}[self.order]
 
     # ---- orders -----------------------------------------------------------
 
@@ -249,6 +310,8 @@ class Unit(Entity):
         self.goal = None
         self.target = None
         self.amove_dest = None
+        self.assist = None
+        self.burst_left = 0
         self.repath = 0.0
 
     def plan_to(self, game, rect, adjacent):
@@ -293,6 +356,17 @@ class Unit(Entity):
     def order_construct(self, game, building):
         self._order_target(game, "construct", building)
 
+    def order_garrison(self, game, bunker):
+        self._order_target(game, "garrison", bunker)
+
+    def order_assist(self, game, kind, tx, ty):
+        """Go and help another engineer put up a building at (tx, ty)."""
+        self._reset(game)
+        self.order = "assist"
+        self.assist = (kind, tx, ty)
+        s = BUILDINGS[kind]["size"]
+        self.plan_to(game, (tx, ty, tx + s - 1, ty + s - 1), True)
+
     def order_build(self, game, kind, tx, ty):
         self._reset(game)
         self.order = "build"
@@ -306,6 +380,18 @@ class Unit(Entity):
         dx, dy = x - self.x, y - self.y
         if dx * dx + dy * dy > 0.25:
             self.facing = math.degrees(math.atan2(dy, dx)) % 360
+
+    def _drive(self, gx, gy, dt):
+        """Vehicles turn their hull towards (gx, gy) at their turn rate, steering the front wheels
+        into the bend. Returns the fraction of full speed they can move this frame."""
+        want = math.degrees(math.atan2(gy - self.y, gx - self.x)) % 360
+        diff = (want - self.facing + 180) % 360 - 180
+        step = HULL_TURN[self.kind] * dt
+        self.facing = (self.facing + max(-step, min(step, diff))) % 360
+        self.steer = -max(-STEER_MAX, min(STEER_MAX, diff))
+        if abs(diff) > 70:
+            return 0.0   # turn on the spot first
+        return max(0.35, math.cos(math.radians(diff)))
 
     def follow(self, game, dt):
         """Advance along the current path. Returns True once there is nowhere left to go."""
@@ -324,7 +410,12 @@ class Unit(Entity):
         d = math.hypot(dx, dy)
         step = self.move_speed * dt
         self.moving = True
-        self.face(gx, gy)
+        if self.is_vehicle:
+            step *= self._drive(gx, gy, dt)
+            if step <= 0:
+                return False
+        else:
+            self.face(gx, gy)
         if d <= step:
             self.x, self.y = gx, gy
             self.path.pop(0)
@@ -339,6 +430,11 @@ class Unit(Entity):
         if d < 0.5:
             return
         step = min(d, self.move_speed * dt)
+        if self.is_vehicle:
+            step *= self._drive(gx, gy, dt)
+            self.moving = True
+            if step <= 0:
+                return
         nx, ny = self.x + dx / d * step, self.y + dy / d * step
         w = game.world
         if w.walkable_px(nx, ny):
@@ -350,14 +446,15 @@ class Unit(Entity):
         else:
             return
         self.moving = True
-        self.face(gx, gy)
+        if not self.is_vehicle:
+            self.face(gx, gy)
 
     def chase(self, game, target, reach, dt):
         """Close in on target until within `reach` px of its edge. Returns True once there."""
         d = self.edge_dist(target)
         if d <= reach:
             self.path = []
-            if not self.has_turret:   # turreted vehicles aim with the turret, not the hull
+            if not self.is_vehicle:   # vehicles aim with the turret, or turn the hull in aim_at()
                 self.face(target.x, target.y)
             return True
         if d < 12:
@@ -380,7 +477,9 @@ class Unit(Entity):
         self._update_suppression(dt)
         self.moving = False
         self.aiming = False
+        self.steer = 0.0
         getattr(self, "do_" + self.order)(game, dt)
+        self.idle_t += dt
         if self.moving:
             self.anim += dt * self.move_speed / self.speed
             self.kneel = 0.0   # heavy infantry stand up to move
@@ -441,6 +540,15 @@ class Unit(Entity):
         if t is None or not t.alive:
             self._target_gone(game)
             return
+        if self.burst_left > 0:   # finish the burst before anything else
+            self.aiming = True
+            self.burst_timer -= dt
+            if self.burst_timer <= 0:
+                self.burst_left -= 1
+                self.burst_timer = BURST_GAP
+                self.lunge = 0.08
+                game.attack(self, t)
+            return
         if not self.chase(game, t, self.attack_range, dt):
             return
         self.aiming = True
@@ -451,7 +559,34 @@ class Unit(Entity):
         if on_target and self.cooldown <= 0:
             self.cooldown = self.attack_time
             self.lunge = 0.12
+            self.burst_left, self.burst_timer = self.burst - 1, BURST_GAP
             game.attack(self, t)
+
+    def do_garrison(self, game, dt):
+        b = self.target
+        if b is None or not b.alive or not b.complete:
+            self._target_gone(game)
+            return
+        if len(b.occupants) >= b.capacity:
+            game.notify(self.team, "Bunker is full")
+            self._target_gone(game)
+            return
+        if self.chase(game, b, INTERACT, dt):
+            game.enter(self, b)
+
+    def do_assist(self, game, dt):
+        kind, tx, ty = self.assist
+        occ = game.world.occupant[ty * game.world.w + tx]
+        if occ is not None and occ.is_building and occ.kind == kind and occ.team == self.team:
+            if occ.complete:
+                self._target_gone(game)
+            else:
+                self.order_construct(game, occ)   # the foundation is down: pitch in
+            return
+        if not any(u.build_plan == (kind, tx, ty) for u in game.units if u.team == self.team):
+            self._target_gone(game)                # the builder gave up or died
+            return
+        self.follow(game, dt)                     # walk over and wait for the foundation
 
     def do_heal(self, game, dt):
         t = self.target

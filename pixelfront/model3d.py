@@ -66,9 +66,12 @@ class Box:
         return pts
 
 
-def render(boxes, facing, fall=0.0, lift=0.0, outline=True, darken=1.0, scale=1.0, ss=1):
+def render(boxes, facing, fall=0.0, lift=0.0, outline=True, darken=1.0, scale=1.0, ss=1, texture=0.0,
+           bounds=None):
     """Render boxes facing `facing` degrees (0 = east, 90 = south). Returns (surface, origin)
-    where origin is the pixel that sits on the model's ground position."""
+    where origin is the pixel that sits on the model's ground position. texture > 0 adds
+    that much pixel grain (used for buildings). Pass the same `bounds` (from measure()) to
+    every frame of an animation to keep them on one fixed canvas, so static parts don't jitter."""
     a = math.radians(facing)
     ca, sa = math.cos(a), math.sin(a)
     k = scale * ss
@@ -107,8 +110,12 @@ def render(boxes, facing, fall=0.0, lift=0.0, outline=True, darken=1.0, scale=1.
                 minx, maxx = min(minx, x), max(maxx, x)
                 miny, maxy = min(miny, y), max(maxy, y)
             faces.append((fc[1] * COS_E + fc[2] * SIN_E, pts2, col))
+    if bounds == "measure":
+        return (minx / k, maxx / k, miny / k, maxy / k)
     if not faces:
         return pygame.Surface((1, 1), pygame.SRCALPHA), (0, 0)
+    if bounds is not None:
+        minx, maxx, miny, maxy = (v * k for v in bounds)
     faces.sort(key=lambda f: f[0])
     pad = 2 * ss
     ox, oy = math.floor(-minx) + pad, math.floor(-miny) + pad
@@ -124,10 +131,21 @@ def render(boxes, facing, fall=0.0, lift=0.0, outline=True, darken=1.0, scale=1.
     if ss > 1:
         surf = _downsample(surf, ss)
         ox, oy = ox / ss, oy / ss
+    if texture:
+        _grain(surf, texture)
     if outline:
         _outline(surf)
+    if bounds is not None:   # fixed canvas: no cropping, so every frame lines up
+        return surf, (int(round(ox)), int(round(oy)))
     r = surf.get_bounding_rect()
     return surf.subsurface(r).copy(), (int(round(ox)) - r.x, int(round(oy)) - r.y)
+
+
+def measure(frames, facing, scale=1.0):
+    """Union screen bounds of several box lists, for render(..., bounds=...)."""
+    found = [render(b, facing, scale=scale, bounds="measure") for b in frames]
+    return (min(f[0] for f in found), max(f[1] for f in found),
+            min(f[2] for f in found), max(f[3] for f in found))
 
 
 def _downsample(surf, ss):
@@ -145,6 +163,22 @@ def _downsample(surf, ss):
                 r, g, b = min(255, int(r * f)), min(255, int(g * f)), min(255, int(b * f))
             out.set_at((x, y), (r, g, b, 255))
     return out
+
+
+def _grain(surf, amount):
+    """Deterministic per-pixel light/dark grain so flat faces read as worn concrete and metal.
+    Glowing colours (very bright or saturated) are left clean."""
+    w, h = surf.get_size()
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = surf.get_at((x, y))
+            if not a or max(r, g, b) > 235 or max(r, g, b) - min(r, g, b) > 120:
+                continue
+            n = ((x * 73856093) ^ (y * 19349663)) % 997 / 997.0   # stable noise in 0..1
+            f = 1.0 + (n - 0.5) * 2 * amount
+            if n > 0.97:
+                f -= amount * 2   # occasional dark fleck
+            surf.set_at((x, y), (min(255, int(r * f)), min(255, int(g * f)), min(255, int(b * f)), a))
 
 
 def _outline(surf):
@@ -299,6 +333,7 @@ def soldier(kind, light, lo, anim="idle", i=0):
             arms[s] = (165, 0, -s * asplay, s * elbow)
 
     _legs(add, tc, armor, speed, legs)
+    upper_from = len(B)   # everything after the legs breathes in the idle animation
     _body(add, kind, tc, armor, weapon, speed, moving)
     _arms(add, kind, tc, armor, weapon, arms)
     W = []
@@ -329,9 +364,22 @@ def soldier(kind, light, lo, anim="idle", i=0):
             big = 2.6 if kind == "heavy" else 2.0
             add(fx((mx + big / 2, my, mz)), (big, big, big), FLASH_Y, glow=True)
             add(fx((mx + 0.4, my, mz)), (big * 0.6,) * 3, FLASH_W, glow=True)
+    if anim == "idle" and i:
+        B[upper_from:] = _raised(B[upper_from:], IDLE_BREATH[i % len(IDLE_BREATH)])
     if muzzle:
         muzzle = transform(muzzle, fall, lift)
     return B, muzzle, fall, lift
+
+
+IDLE_BREATH = (0.0, 0.25, 0.45, 0.25)   # upper-body rise per idle frame
+IDLE_SHAKE = (0.0, 0.3)                 # vehicle body shake per idle frame, engine running
+
+
+def _raised(boxes, dz):
+    """The same boxes lifted by dz (rotation pivots too, so limbs stay attached)."""
+    return [Box((b.pos[0], b.pos[1], b.pos[2] + dz), b.size, b.color,
+                tuple((ax, deg, (p[0], p[1], p[2] + dz)) for ax, deg, p in b.rot), b.glow, b.fixed)
+            for b in boxes]
 
 
 def _legs(add, tc, armor, speed, legs):
@@ -369,9 +417,10 @@ def _body(add, kind, tc, armor, weapon, speed, moving):
     fx = 2.3 if armor else 1.85
     if kind == "engineer":
         add((fx, 0, 11.0), (0.3, 6.1, 0.7), YELLOW)
-    if kind == "medic":
-        add((fx, 1.2, 13.0), (0.3, 0.6, 1.8), RED)
-        add((fx, 1.2, 13.0), (0.3, 1.8, 0.6), RED)
+    if kind == "medic":   # red cross on a white patch
+        add((fx, 1.2, 13.0), (0.25, 2.6, 2.6), WHITE)
+        add((fx + 0.05, 1.2, 13.0), (0.3, 0.6, 1.8), RED)
+        add((fx + 0.05, 1.2, 13.0), (0.3, 1.8, 0.6), RED)
 
     # Head: stacked boxes so heads and helmets read as rounded.
     add((0.2, 0, 17.0), (3.4, 3.4, 3.2), SKIN)
@@ -385,8 +434,9 @@ def _body(add, kind, tc, armor, weapon, speed, moving):
         add((0, 0, 20.1), (3.0, 3.0, 0.8), hat)
         add((2.0, 0, 17.9), (0.4, 3.0, 1.0), CYAN, glow=True)
         if kind == "medic":
-            add((0, 0, 20.55), (1.8, 0.6, 0.2), RED)
-            add((0, 0, 20.55), (0.6, 1.8, 0.2), RED)
+            add((0, 0, 20.5), (2.6, 2.6, 0.15), WHITE)
+            add((0, 0, 20.6), (1.8, 0.6, 0.2), RED)
+            add((0, 0, 20.6), (0.6, 1.8, 0.2), RED)
         elif kind == "engineer":
             add((0, 0, 19.0), (4.1, 4.1, 0.6), YELLOW)
 
@@ -427,10 +477,19 @@ def _arms(add, kind, tc, armor, weapon, arms):
         add((0, y, (SHOULDER_Z + ELBOW_Z) / 2), (2.0, 2.0, SHOULDER_Z - ELBOW_Z + 0.4), KHAKI, upper)
         add((0, y, ELBOW_Z - 1.3), (1.9, 1.9, 2.6), KHAKI, lower)
         add((0, y, ELBOW_Z - 3.2), (2.0, 2.0, 1.3), glove, lower)
-        if armor == 0 and s == 1:
-            # No helmet or vest to carry the team colour: a bandana knotted round the left arm.
+        if armor == 0:
+            # No helmet or vest to carry the team colour: bandanas knotted round both arms.
             add((0, y, SHOULDER_Z - 1.2), (2.4, 2.4, 1.0), tc["T"], upper)
-            add((-1.3, y + 0.5, SHOULDER_Z - 1.6), (0.6, 0.5, 1.4), tc["T"], upper)
+            add((-1.3, y + s * 0.5, SHOULDER_Z - 1.6), (0.6, 0.5, 1.4), tc["T"], upper)
+        # Trade patches on top of the shoulders, visible from the camera at any armour tier:
+        # medics white with a red centre, engineers yellow and light grey.
+        top = SHOULDER_Z + (0.55 if armor == 2 else 0.15)
+        if kind == "medic":
+            add((0, y, top), (2.3, 2.3, 0.5), WHITE, upper)
+            add((0, y, top + 0.2), (0.9, 0.9, 0.3), RED, upper)
+        elif kind == "engineer":
+            add((0.5, y, top), (1.3, 2.3, 0.5), YELLOW, upper)
+            add((-0.65, y, top), (1.0, 2.3, 0.5), METAL_L, upper)
         if armor == 2:
             add((0, y, SHOULDER_Z - 0.4), (2.5, 2.3, 1.6), METAL, upper)   # shoulder plate
             add((0, y, ELBOW_Z), (2.3, 2.2, 1.0), METAL, lower)           # elbow plate
@@ -545,23 +604,28 @@ def _kit_backpack(add, kind, x):
 # Speed slot sets the running gear (Slow = full tracks, Normal = half-tracks, Fast = wheels).
 # Armour slot only adds plating; the footprint stays the same.
 
-def _wheel(add, x, y, z, size, side, phase):
-    """A tyre with a hub and tread blocks; the spokes and treads turn with `phase` so it rolls."""
-    add((x, y, z), (size, 2.8, size), TYRE)
-    oy = y + side * 1.45
-    add((x, oy, z), (size * 0.55, 0.2, size * 0.55), METAL_D)
-    add((x, oy + side * 0.1, z), (size * 0.3, 0.2, size * 0.3), METAL_L)
+def _wheel(add, x, y, z, size, side, phase, steer=0.0, front=False):
+    """A tyre with a hub and tread blocks; the spokes and treads turn with `phase` so it rolls.
+    Steering wheels yaw by `steer` degrees and get a light rim so they stand out."""
+    rot = (("yaw", steer, (x, y, z)),) if steer else ()
+    w = 3.2 if front else 2.8
+    add((x, y, z), (size, w, size), TYRE, rot)
+    oy = y + side * (w / 2 + 0.05)
+    if front:
+        add((x, oy, z), (size * 0.8, 0.2, size * 0.8), METAL_L, rot)       # rim
+    add((x, oy + side * 0.05, z), (size * 0.55, 0.2, size * 0.55), METAL_D, rot)
+    add((x, oy + side * 0.1, z), (size * 0.3, 0.2, size * 0.3), METAL_L, rot)
     if phase % 2:
-        add((x, oy + side * 0.15, z), (size * 0.75, 0.15, 0.5), METAL)
+        add((x, oy + side * 0.15, z), (size * 0.75, 0.15, 0.5), METAL, rot)
     else:
-        add((x, oy + side * 0.15, z), (0.5, 0.15, size * 0.75), METAL)
+        add((x, oy + side * 0.15, z), (0.5, 0.15, size * 0.75), METAL, rot)
     for k in range(4):   # tread blocks on the rolling face
         ang = (k * 90 + phase * 30) % 360
         if 200 < ang < 340:
             continue
         rx = math.cos(math.radians(ang)) * size / 2
         rz = math.sin(math.radians(ang)) * size / 2
-        add((x + rx, y + side * 1.2, z + rz), (0.7, 0.5, 0.7), (60, 60, 64))
+        add((x + rx, y + side * 1.2, z + rz), (0.7, 0.5, 0.7), (60, 60, 64), rot)
 
 
 def _track(add, x0, x1, y, z, h, w, side, phase):
@@ -583,8 +647,9 @@ def _track(add, x0, x1, y, z, h, w, side, phase):
         add((x, y + side * (w / 2 + 0.15), z + 0.6), (2.2, 0.2, 2.2), GUN_L)
 
 
-def _running_gear(add, speed, phase, front, rear, y, z, h, wheel, wreck=False):
-    """Wheels, half-tracks or full tracks between x=rear and x=front on both sides."""
+def _running_gear(add, speed, phase, front, rear, y, z, h, wheel, wreck=False, steer=0.0, fender=None):
+    """Wheels, half-tracks or full tracks between x=rear and x=front on both sides.
+    Front wheels steer by `steer` degrees; `fender` colours the mudguards over them."""
     for s in (1, -1):
         yy = s * y
         if speed == 2:                      # wheels
@@ -593,16 +658,30 @@ def _running_gear(add, speed, phase, front, rear, y, z, h, wheel, wreck=False):
             for k in range(count):
                 x = front - wheel / 2 - k * (span - wheel) / (count - 1)
                 if not (wreck and k == 0):
-                    _wheel(add, x, yy, wheel / 2, wheel, s, phase)
-        elif speed == 1:                    # half-track: steering wheels up front, tracks behind
+                    _wheel(add, x, yy, wheel / 2, wheel, s, phase, steer if k == 0 else 0.0, k == 0)
+        elif speed == 1:                    # half-track: big steering wheels up front, tracks behind
+            fw = wheel * 1.15
+            fx = front - fw / 2
             if not wreck:
-                _wheel(add, front - wheel / 2, yy, wheel / 2, wheel, s, phase)
-            _track(add, rear, front - wheel - 1.0, yy, z, h, 2.8, s, phase)
+                _wheel(add, fx, yy, fw / 2, fw, s, phase, steer, True)
+            if fender:
+                add((fx, yy, fw + 0.3), (fw + 1.2, 3.6, 0.5), fender)
+                add((fx + fw / 2 + 0.5, yy, fw - 0.6), (0.5, 3.6, 1.6), fender)
+            _track(add, rear, front - fw - 1.0, yy, z, h, 2.8, s, phase)
         else:                               # full tracks
             _track(add, rear, front, yy, z, h, 3.2, s, phase)
 
 
-def tank(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False, turret=0.0):
+def tank(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False, turret=0.0, steer=0.0,
+         shake=0.0):
+    B, muzzle, gear = _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer)
+    if shake:   # idling engine: the body rocks on its suspension, the running gear stays put
+        B[gear:] = _raised(B[gear:], shake)
+        muzzle = (muzzle[0], muzzle[1], muzzle[2] + shake)
+    return B, muzzle
+
+
+def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     tc = team_set(light)
     armor, weapon, speed = lo.get("armor", 1), lo.get("weapon", 1), lo.get("engine", 1)
     B = []
@@ -610,7 +689,8 @@ def tank(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False,
     hull = blend(tc["Td"], OLIVE, 0.35)
     hull_l = shade(hull, 1.12)
 
-    _running_gear(add, speed, phase, 15.5, -15.5, 7.2, 3.0, 6.0, 6.4, wreck)
+    _running_gear(add, speed, phase, 15.5, -15.5, 7.2, 3.0, 6.0, 6.4, wreck, steer, shade(hull, 0.9))
+    gear = len(B)
     add((0, 0, 7.4), (27, 11, 4), hull)
     add((14.2, 0, 8.4), (4.0, 11, 3.0), hull, (("pitch", -30, (14.2, 0, 8.4)),))
     # Engine deck: grille slats and access hatch.
@@ -721,21 +801,31 @@ def tank(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False,
         size = {0: 2.0, 1: 3.2, 2: 4.0}[weapon]
         tadd((muzzle[0] + fx * size / 2, 0, muzzle[2] + fz * size / 2), (size, size, size), FLASH_Y, glow=True)
         tadd((muzzle[0] + fx * 0.8, 0, muzzle[2] + fz * 0.8), (size * 0.6,) * 3, FLASH_W, glow=True)
-    return B, _rotate(muzzle, "yaw", turret, TANK_PIVOT)
+    return B, _rotate(muzzle, "yaw", turret, TANK_PIVOT), gear
 
 
 JEEP_PIVOT = (-4.8, 0, 0)    # the pintle the rear weapon and its gunner swivel on
 TANK_PIVOT = (-1, 0, 0)      # turret ring centre
 
 
-def jeep(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False, turret=0.0):
+def jeep(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False, turret=0.0, steer=0.0,
+         shake=0.0):
     """turret = the rear weapon's angle relative to the hull, in degrees (positive = left)."""
+    B, muzzle, gear = _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer)
+    if shake:
+        B[gear:] = _raised(B[gear:], shake)
+        muzzle = (muzzle[0], muzzle[1], muzzle[2] + shake)
+    return B, muzzle
+
+
+def _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     tc = team_set(light)
     armor, weapon, speed = lo.get("armor", 1), lo.get("weapon", 1), lo.get("engine", 1)
     B = []
     add = lambda *a, **k: B.append(Box(*a, **k))
     body = tc["T"]
-    _running_gear(add, speed, phase, 11.0, -11.0, 6.0, 2.4, 4.6, 5.2, wreck)
+    _running_gear(add, speed, phase, 11.0, -11.0, 6.0, 2.4, 4.6, 5.2, wreck, steer, shade(body, 0.8))
+    gear = len(B)
     add((0, 0, 5.6), (24, 9.4, 3), shade(body, 0.75))
     if armor == 0:
         # Open frame: rails, seats and floor showing.
@@ -846,7 +936,7 @@ def jeep(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False,
         fx, fy = math.cos(a), math.sin(a)
         add((muzzle[0] + fx, muzzle[1] + fy, muzzle[2]), (2.0, 2.0, 2.0), FLASH_Y, glow=True)
         add((muzzle[0] + fx * 0.5, muzzle[1] + fy * 0.5, muzzle[2]), (1.2, 1.2, 1.2), FLASH_W, glow=True)
-    return B, muzzle
+    return B, muzzle, gear
 
 
 # ---- buildings ------------------------------------------------------------------
@@ -898,11 +988,18 @@ def command_center(light):
 
 
 def barracks(light):
+    """A 2x2 bunker: designed on the 3x3 grid like the others, then shrunk to fit 32px."""
     tc = team_set(light)
     T = tc["T"]
     B = []
-    b = lambda *a, **k: _bbox(B, *a, **k)
+    k2 = 2 / 3
+
+    def b(east, south, up, w, d, h, col, glow=False, rot=()):
+        _bbox(B, east * k2, south * k2, up * 0.85, w * k2, d * k2, h * 0.85, col, glow, rot)
+
     b(0, 0, 0, 46, 46, 1.5, CONCRETE_D)
+    for x in (-10, 6):                                          # weathering streaks on the walls
+        b(x, 12.15, 3, 1.0, 0.3, 6, shade(CONCRETE, 0.85))
     b(0, -4, 1.5, 42, 32, 9, CONCRETE)                       # bunker walls
     b(0, -4, 10.5, 38, 28, 3, shade(CONCRETE, 0.95))          # stepped roof
     b(0, -4, 13.5, 32, 22, 1.2, shade(CONCRETE, 1.08))
@@ -950,22 +1047,75 @@ def vehicle_yard(light):
     return B
 
 
-def derrick():
+def derrick(rock=0.0):
+    """Pump jack; `rock` tilts the walking beam (degrees) for the pumping animation."""
     B = []
     b = lambda *a, **k: _bbox(B, *a, **k)
     b(0, 0, 0, 22, 14, 1.4, CONCRETE)
+    b(-6, 3, 1.4, 6, 4, 0.2, (40, 34, 30))                    # oil stain
     b(-2, 0, 1.4, 8, 6, 2.4, GUN)                             # motor housing
+    b(-2, 0, 3.8, 6, 4, 0.4, GUN_L)
     for s in (1, -1):                                          # A-frame legs
         b(2, s * 2.2, 1.4, 1, 1, 13, METAL, rot=(("pitch", s * 14, (s * 2.2 * DEPTH, 2, 1.4)),))
-    b(2, 0, 13.4, 16, 1.4, 1.4, (60, 60, 64))                 # walking beam
-    b(10, 0, 11.2, 2.0, 2.2, 5, (40, 38, 40))                 # horse head
-    b(-6, 0, 11.6, 3, 2.4, 3, (90, 60, 40))                   # counterweight
-    b(10, 0, 1.4, 1.2, 1.2, 9, GUN)                           # polished rod / wellhead
+    beam = (("roll", rock, (0, 2, 14.1)),)                     # beam, horse head and weight rock together
+    b(2, 0, 13.4, 16, 1.4, 1.4, (60, 60, 64), rot=beam)        # walking beam
+    b(10, 0, 11.2, 2.0, 2.2, 5, (40, 38, 40), rot=beam)        # horse head
+    b(-6, 0, 11.6, 3, 2.4, 3, (90, 60, 40), rot=beam)          # counterweight
+    rod = -math.sin(math.radians(rock)) * 8                    # the rod rides up and down with the head
+    b(10, 0, 1.4, 1.2, 1.2, 9 + rod, GUN)                      # polished rod / wellhead
+    b(10, 0, 1.4, 2.4, 2.4, 1.6, METAL_D)
     b(-8, 3, 1.4, 3, 3, 4, (120, 80, 50))                     # oil tank
+    b(-8, 3, 5.4, 3.2, 3.2, 0.4, (90, 60, 40))
     return B
 
 
-BUILDING_MODELS = {"command": command_center, "barracks": barracks, "yard": vehicle_yard}
+DERRICK_FRAMES = 8
+DERRICK_PERIOD = 2.4   # seconds per pump stroke
+
+
+def derrick_rock(i):
+    return 12 * math.sin(2 * math.pi * i / DERRICK_FRAMES)
+
+
+def bunker(light, manned=False):
+    """A 2x2 concrete pillbox ringed with sandbags. Manned bunkers show helmets at the slits."""
+    tc = team_set(light)
+    T = tc["T"]
+    B = []
+    k2 = 2 / 3
+
+    def b(east, south, up, w, d, h, col, glow=False, rot=()):
+        _bbox(B, east * k2, south * k2, up * 0.8, w * k2, d * k2, h * 0.8, col, glow, rot)
+
+    b(0, 0, 0, 46, 46, 1.2, CONCRETE_D)
+    for k in range(10):                                         # sandbag ring
+        ang = k * math.tau / 10
+        ex, sy = math.cos(ang) * 19, math.sin(ang) * 19
+        b(ex, sy, 1.2, 7, 6, 3.0, (170, 150, 104) if k % 2 else (158, 138, 94))
+    # Octagonal pillbox: stacked, narrowing slabs.
+    b(0, -1, 1.2, 30, 30, 9, CONCRETE)
+    b(0, -1, 1.2, 36, 22, 9, CONCRETE)
+    b(0, -1, 1.2, 22, 36, 9, CONCRETE)
+    b(0, -1, 10.2, 28, 28, 2.4, shade(CONCRETE, 1.08))
+    b(0, -1, 12.6, 20, 20, 1.2, shade(CONCRETE, 0.95))
+    b(0, -1, 13.8, 6, 6, 1.0, GUN_L)                           # roof hatch
+    b(0, 17.15, 4.2, 36, 0.3, 1.6, T)                           # team band
+    for s in (1, -1):
+        b(s * 18.15, -1, 4.2, 0.3, 22, 1.6, T)
+    # Firing slits: front and both sides.
+    slit = (20, 20, 24)
+    b(0, 17.2, 7.0, 20, 0.4, 1.6, slit)
+    for s in (1, -1):
+        b(s * 18.2, -1, 7.0, 0.4, 14, 1.6, slit)
+    if manned:   # helmets of the garrison in the slits, and a barrel poking out
+        for e in (-6, 0, 6):
+            b(e, 16.4, 7.2, 3, 2, 1.4, T)
+        b(3, 19.0, 7.4, 1, 4, 0.8, GUN)
+    b(10, -14, 13.8, 0.8, 0.8, 8, GUN)                          # radio mast
+    return B
+
+
+BUILDING_MODELS = {"command": command_center, "barracks": barracks, "yard": vehicle_yard, "bunker": bunker}
 
 
 def under_construction(boxes, progress):

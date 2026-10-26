@@ -8,7 +8,7 @@ import random
 import pygame
 
 from . import model3d as m3
-from .config import TILE, TEAM_COLORS, PLAYER, ENEMY, UNITS, KNEEL_TIME
+from .config import TILE, TEAM_COLORS, PLAYER, ENEMY, UNITS, KNEEL_TIME, STEER_MAX
 from .modules import default_loadout
 from .world import SAND, DUNE, ROCK, CLIFF
 
@@ -61,8 +61,8 @@ FACINGS = {"infantry": 8, "vehicle": 16}
 
 # Animation -> frame count. Infantry "prone"/"pfire" are the pinned-down crawl and prone firing.
 FRAMES = {
-    "infantry": dict(idle=1, walk=4, fire=2, work=2, prone=2, pfire=2, kneel=2, kfire=2, die=4),
-    "vehicle": dict(idle=1, walk=3, fire=2, die=1),
+    "infantry": dict(idle=4, walk=4, fire=2, work=2, prone=2, pfire=2, kneel=2, kfire=2, die=4),
+    "vehicle": dict(idle=2, walk=3, fire=2, die=1),
 }
 DEATH_STEPS = (0.08, 0.18, 0.3)   # seconds at which each infantry death frame ends
 WALK_RATE = {"infantry": 8.0, "vehicle": 10.0}  # frames per second at the unit's base speed
@@ -84,7 +84,11 @@ def unit_anim(u):
         return ("fire" if u.order == "attack" else "work"), int(firing)
     if u.moving:
         return "walk", int(u.anim * WALK_RATE["vehicle" if u.is_vehicle else "infantry"])
-    return "idle", 0
+    # Idle: soldiers breathe slowly, vehicles shake with the engine running. The unit id
+    # offsets the cycle so a squad doesn't breathe in unison.
+    if u.is_vehicle:
+        return "idle", int(u.idle_t * 10) % 2
+    return "idle", int((u.idle_t + u.id * 0.37) * 2.5) % 4
 
 
 def death_frame(age):
@@ -94,19 +98,22 @@ def death_frame(age):
     return len(DEATH_STEPS)
 
 
-def _render_unit(kind, light, lo, anim, i, facing, turret=0.0):
+STEER_STEPS = (-1, 0, 1)   # front wheels: hard left, straight, hard right
+
+
+def _render_unit(kind, light, lo, anim, i, facing, turret=0.0, steer=0.0):
     if UNITS[kind]["cls"] == "vehicle":
         build = m3.tank if kind == "tank" else m3.jeep
         darken = 1.0
         if anim == "walk":
-            b, _ = build(light, lo, phase=i, moving=True, turret=turret)
+            b, _ = build(light, lo, phase=i, moving=True, turret=turret, steer=steer)
         elif anim == "fire":
             b, _ = build(light, lo, recoil=1.5 if i else 0, flash=bool(i), turret=turret)
         elif anim == "die":
             b, _ = build(light, lo, wreck=True, turret=turret)
             darken = 0.4
         else:
-            b, _ = build(light, lo, turret=turret)
+            b, _ = build(light, lo, turret=turret, steer=steer, shake=m3.IDLE_SHAKE[i % len(m3.IDLE_SHAKE)])
         return m3.render(b, facing, darken=darken)
     b, _, fall, lift = m3.soldier(kind, light, lo, anim, i)
     return m3.render(b, facing, fall, lift, scale=m3.INF_SCALE, ss=m3.INF_SS)
@@ -128,25 +135,27 @@ class UnitSprite:
     def facing_index(self, angle):
         return int(round(angle / (360 / self.facings))) % self.facings
 
-    def frame(self, anim, i, angle, turret=0.0):
+    def frame(self, anim, i, angle, turret=0.0, steer=0.0):
         """(surface, origin) for animation `anim`, frame i, facing `angle` degrees; vehicles
-        also take the turret's angle relative to the hull."""
+        also take the turret's angle relative to the hull and the front wheels' steering."""
         if anim not in self.frames:
             anim = "fire" if anim == "work" else "idle"
         i %= self.frames[anim]
         fi = self.facing_index(angle)
-        ti = self.facing_index(turret) if self.cls == "vehicle" else 0
-        key = (anim, i, fi, ti)
+        vehicle = self.cls == "vehicle"
+        ti = self.facing_index(turret) if vehicle else 0
+        si = (0 if abs(steer) < STEER_MAX / 3 else (1 if steer > 0 else -1)) if vehicle else 0
+        key = (anim, i, fi, ti, si)
         got = self._cache.get(key)
         if got is None:
             step = 360 / self.facings
             got = self._cache[key] = _render_unit(self.kind, self.light, self.loadout, anim, i,
-                                                  fi * step, ti * step)
+                                                  fi * step, ti * step, si * STEER_MAX)
         return got
 
-    def flash(self, anim, i, angle, turret=0.0):
+    def flash(self, anim, i, angle, turret=0.0, steer=0.0):
         """White silhouette of a frame, for hit flashes."""
-        surf, origin = self.frame(anim, i, angle, turret)
+        surf, origin = self.frame(anim, i, angle, turret, steer)
         key = id(surf)
         got = self._flash.get(key)
         if got is None:
@@ -185,11 +194,12 @@ def muzzle_offset(kind, loadout, angle, prone=False, turret=0.0, kneel=False):
 BUILD_STAGES = 6   # construction is shown in this many height steps
 
 
-def render_building(kind, team, stage=BUILD_STAGES):
-    boxes = m3.BUILDING_MODELS[kind](TEAM_COLORS[team][0])
+def render_building(kind, team, stage=BUILD_STAGES, manned=False):
+    model = m3.BUILDING_MODELS[kind]
+    boxes = model(TEAM_COLORS[team][0], manned) if kind == "bunker" else model(TEAM_COLORS[team][0])
     if stage < BUILD_STAGES:
         boxes = m3.under_construction(boxes, (stage + 1) / (BUILD_STAGES + 1))
-    return m3.render(boxes, m3.BUILD_FACING, ss=2)
+    return m3.render(boxes, m3.BUILD_FACING, ss=2, texture=0.07)
 
 
 METAL, METAL_D, METAL_L = (150, 156, 166), (96, 102, 114), (198, 204, 212)
@@ -355,7 +365,10 @@ class Sprites:
         self._units = {}
         self._buildings = {}
         self._flashes = {}
-        self.derrick = m3.render(m3.derrick(), m3.BUILD_FACING, ss=2)
+        # All pump frames share one canvas, so only the beam moves and the base stays still.
+        models = [m3.derrick(m3.derrick_rock(i)) for i in range(m3.DERRICK_FRAMES)]
+        bounds = m3.measure(models, m3.BUILD_FACING)
+        self.derrick_frames = [m3.render(b, m3.BUILD_FACING, ss=2, texture=0.06, bounds=bounds) for b in models]
         self.icons = {"move": icon_move(), "stop": icon_stop(), "attack": icon_attack(),
                       "repair": icon_repair(), "design": icon_design(), "cancel": icon_cancel()}
         for kind in UNITS:
@@ -373,13 +386,35 @@ class Sprites:
             spr = self._units[key] = UnitSprite(kind, team, loadout)
         return spr
 
-    def building(self, kind, team, progress=1.0):
+    def building(self, kind, team, progress=1.0, manned=False):
         """(surface, origin) for a building; origin sits on the footprint's centre."""
         stage = BUILD_STAGES if progress >= 1 else min(BUILD_STAGES - 1, int(progress * BUILD_STAGES))
-        key = (kind, team, stage)
+        key = (kind, team, stage, manned)
         got = self._buildings.get(key)
         if got is None:
-            got = self._buildings[key] = render_building(kind, team, stage)
+            got = self._buildings[key] = render_building(kind, team, stage, manned)
+        return got
+
+    def derrick(self, t):
+        """(surface, origin) of the pump jack at game time t: it pumps continuously."""
+        i = int(t / m3.DERRICK_PERIOD * m3.DERRICK_FRAMES) % m3.DERRICK_FRAMES
+        return self.derrick_frames[i]
+
+    def building_shadow(self, kind, size):
+        """A soft ground shadow cast to the lower right (light comes from the upper left)."""
+        key = ("shadow", kind)
+        got = self._buildings.get(key)
+        if got is None:
+            img, (ox, oy) = self.building(kind, PLAYER)
+            foot = size * TILE
+            rise = max(4, img.get_height() - foot)            # how tall the building stands on screen
+            sw = int(rise * 0.45)
+            surf = pygame.Surface((foot + sw, foot + sw // 2), pygame.SRCALPHA)
+            col = (40, 24, 10, 100)
+            # East band (the building's right side) and south band (in front), sheared down-right.
+            pygame.draw.polygon(surf, col, [(foot, 2), (foot + sw, 2 + sw // 2), (foot + sw, foot + sw // 2),
+                                            (sw, foot + sw // 2), (sw // 2, foot), (foot, foot)])
+            got = self._buildings[key] = surf
         return got
 
     def building_flash(self, kind, team):
@@ -393,7 +428,7 @@ class Sprites:
         if e.is_unit:
             return self.unit(e.kind, e.team, e.loadout).image
         if e.is_point:
-            return self.derrick[0]
+            return self.derrick_frames[0][0]
         return self.building(e.kind, e.team)[0]
 
     def portrait(self, e):

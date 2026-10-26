@@ -8,7 +8,7 @@ import random
 
 import pygame
 
-from .config import SCREEN_W, PLAYER, ENEMY, UNITS, KNEEL_TIME
+from .config import SCREEN_W, PLAYER, ENEMY, UNITS, KNEEL_TIME, STEER_MAX
 from .entities import PROJECTILES
 from .font import draw_text
 from .modules import SLOTS, slots_for, tiers, tier, slot_label, default_loadout, compute_stats
@@ -251,7 +251,13 @@ class MotionTest:
         mid = S.w // 2
         sx = self.shooter_x(kind)
         if col == 0:                                  # turning through every facing
-            self.blit_unit(cell, kind, lo, "idle", 0, (self.t * 45) % 360, mid)
+            if infantry:   # idle breathing while turning
+                self.blit_unit(cell, kind, lo, "idle", int(self.t * 2.5), (self.t * 45) % 360, mid)
+            else:                                     # vehicles drive round with the wheels steered in
+                spr = self.sp.unit(kind, self.team, lo)
+                draw_shadow(cell, mid, S.ground, UNITS[kind]["radius"])
+                img, (ox, oy) = spr.frame("walk", int(self.t * rate), (self.t * 45) % 360, 0, -STEER_MAX)
+                cell.blit(img, (mid - ox, S.ground - oy))
         elif col == 1:                                # walking / driving
             facing = 0 if c["walk_dir"] > 0 else 180
             self.blit_unit(cell, kind, lo, "walk", int(c["walk_anim"] * rate), facing, c["walk_x"])
@@ -275,7 +281,7 @@ class MotionTest:
         elif col == 3:                                # pinned: crawl, then shoot from the dirt
             if not infantry:                          # vehicles: the turret traverses instead
                 if kind == "tank" and lo.get("weapon") == 2:
-                    self.blit_unit(cell, kind, lo, "idle", 0, 0, mid)
+                    self.blit_unit(cell, kind, lo, "idle", int(self.t * 10), 0, mid)
                     draw_text(cell, "fixed gun", mid, 2, (120, 80, 50), shadow=None, align="center")
                 else:
                     spr = self.sp.unit(kind, self.team, lo)
@@ -292,7 +298,7 @@ class MotionTest:
         else:                                         # dying
             age = (self.t % DIE_CYCLE) - 0.7
             if age < 0:
-                self.blit_unit(cell, kind, lo, "idle", 0, 0, mid)
+                self.blit_unit(cell, kind, lo, "idle", int(self.t * (2.5 if infantry else 10)), 0, mid)
             else:
                 d = dict(kind="wreck" if not infantry else "fall", unit=kind, team=self.team, loadout=lo,
                          facing=0, r=UNITS[kind]["radius"], life=DIE_CYCLE + 1.5)

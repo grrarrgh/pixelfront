@@ -1,4 +1,6 @@
-"""Bottom control panel, top resource bar, minimap and tooltips."""
+"""Bottom control panel, top resource bar, minimap, radar and tooltips."""
+import math
+
 import pygame
 
 from .config import (SCREEN_W, SCREEN_H, VIEW_H, HUD_H, TOPBAR_H, TILE, PLAYER, ENEMY, NEUTRAL, UNITS,
@@ -38,6 +40,17 @@ class HUD:
         w = game.world
         self.minimap_rect = pygame.Rect(8, VIEW_H + 8, w.w, w.h)
         self.mm_base = render_minimap(w)
+        # Radar in the top-right corner: the same map in radar green.
+        self.radar_rect = pygame.Rect(SCREEN_W - w.w - 5, TOPBAR_H + 4, w.w, w.h)
+        self.radar_base = self.mm_base.copy()
+        for y in range(w.h):
+            for x in range(w.w):
+                r, g, b, _ = self.radar_base.get_at((x, y))
+                lum = (r * 3 + g * 4 + b) // 8
+                self.radar_base.set_at((x, y), (lum // 7, 30 + lum // 3, 14 + lum // 6))
+        for k in range(0, w.w, 8):
+            pygame.draw.line(self.radar_base, (24, 70, 36), (k, 0), (k, w.h - 1))
+            pygame.draw.line(self.radar_base, (24, 70, 36), (0, k), (w.w - 1, k))
         self.topbar = pygame.Surface((SCREEN_W, TOPBAR_H), pygame.SRCALPHA)
         self.topbar.fill((10, 8, 14, 180))
         self.panel = pygame.Surface((SCREEN_W, HUD_H))
@@ -83,8 +96,11 @@ class HUD:
                 return i
         return None
 
-    def minimap_to_world(self, pos):
-        r = self.minimap_rect
+    def radar_to_world(self, pos):
+        return self.minimap_to_world(pos, self.radar_rect)
+
+    def minimap_to_world(self, pos, rect=None):
+        r = rect or self.minimap_rect
         x = min(max(pos[0], r.left), r.right - 1) - r.left
         y = min(max(pos[1], r.top), r.bottom - 1) - r.top
         return x * TILE + TILE / 2, y * TILE + TILE / 2
@@ -93,6 +109,7 @@ class HUD:
 
     def draw(self, surf, ctrl):
         self.draw_topbar(surf)
+        self.draw_radar(surf, ctrl)
         surf.blit(self.panel, (0, VIEW_H))
         self.draw_minimap(surf, ctrl)
         self.draw_info(surf, ctrl)
@@ -130,6 +147,45 @@ class HUD:
             age = g.time - when
             c = 255 if age < 4 else int(255 * max(0.2, 1 - (age - 4) / 2))
             draw_text(surf, text, 4, TOPBAR_H + 4 + i * 8, (c, c, c))
+
+    def draw_radar(self, surf, ctrl):
+        """Top-right radar: fog of war, a rotating sweep and blips for everything on the map."""
+        g = self.game
+        r = self.radar_rect
+        pygame.draw.rect(surf, (8, 14, 10), r.inflate(6, 6))
+        pygame.draw.rect(surf, (70, 130, 84), r.inflate(6, 6), 1)
+        surf.blit(self.radar_base, r)
+        blink = int(g.time * 3) % 2
+        for e in g.entities:
+            if not g.seen(e):
+                continue
+            if e.is_unit:
+                tx, ty = e.tile()
+                if e.team == PLAYER:
+                    surf.set_at((r.x + tx, r.y + ty), (150, 255, 160))
+                else:
+                    size = 2 if blink else 1
+                    surf.fill((255, 70, 60), (r.x + tx, r.y + ty, size, size))
+            elif e.is_point:
+                surf.fill(team_color(e.team), (r.x + e.tx, r.y + e.ty, 2, 2))
+            else:
+                col = (110, 230, 130) if e.team == PLAYER else (230, 70, 60)
+                pygame.draw.rect(surf, col, (r.x + e.tx, r.y + e.ty, e.size, e.size), 1)
+        surf.blit(g.fog.small, r)
+        # Sweep line with a short fading trail.
+        cx, cy = r.center
+        clip = surf.get_clip()
+        surf.set_clip(r)
+        for k in range(6):
+            a = g.time * 2.0 - k * 0.07
+            ex = cx + math.cos(a) * r.w * 0.75
+            ey = cy + math.sin(a) * r.h * 0.75
+            pygame.draw.line(surf, (40, max(0, 200 - k * 35), 70), (cx, cy), (int(ex), int(ey)))
+        surf.set_clip(clip)
+        cam = pygame.Rect(r.x + int(ctrl.cam_x / TILE), r.y + int(ctrl.cam_y / TILE),
+                          SCREEN_W // TILE, VIEW_H // TILE)
+        pygame.draw.rect(surf, (230, 240, 230), cam.clip(r), 1)
+        draw_text(surf, "RADAR", r.x, r.bottom + 4, (110, 200, 120))
 
     def draw_minimap(self, surf, ctrl):
         g = self.game
@@ -206,6 +262,17 @@ class HUD:
         draw_text(surf, f"Armor {e.armor}", x, y, GREY)
         if e.team != PLAYER:
             return
+        if e.capacity:   # bunker: who's manning it
+            draw_text(surf, f"Garrison {len(e.occupants)}/{e.capacity}", x, y + 9, (230, 230, 230))
+            for i, u in enumerate(e.occupants):
+                r = pygame.Rect(TEXT_X + i * 25, VIEW_H + 46, 22, 22)
+                bevel(surf, r, fill=(58, 54, 66))
+                img = fit(self.sp.unit(u.kind, PLAYER, u.loadout).image, 18)
+                surf.blit(img, img.get_rect(center=r.center))
+                hp_bar(surf, r.x + 2, r.bottom + 2, r.w - 4, u.hp / u.max_hp)
+            if not e.occupants:
+                draw_text(surf, "Right-click it with infantry to man it.", x, y + 18, GREY)
+            return
         if e.queue:
             item = e.queue[0]
             draw_text(surf, "Training " + UNITS[item["kind"]]["name"], x, y + 9, (230, 230, 230))
@@ -265,6 +332,9 @@ class HUD:
         if cmd.get("supply"):
             ok = team.supply_used + cmd["supply"] <= team.supply_cap
             lines.append((f"Supply: {cmd['supply']}", (230, 230, 230) if ok else (240, 90, 80)))
+        if cmd.get("time"):
+            note = f" ({cmd['time_note']})" if cmd.get("time_note") else ""
+            lines.append((f"Build time: {cmd['time']:.0f}s{note}", (230, 230, 230)))
         w = max(text_width(t) for t, _ in lines) + 8
         h = len(lines) * 8 + 5
         x, y = SCREEN_W - w - 4, VIEW_H - h - 2
