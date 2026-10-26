@@ -8,14 +8,16 @@ import random
 
 import pygame
 
-from .config import SCREEN_W, PLAYER, ENEMY, UNITS
+from .config import SCREEN_W, PLAYER, ENEMY, UNITS, KNEEL_TIME
+from .entities import PROJECTILES
 from .font import draw_text
 from .modules import SLOTS, slots_for, tiers, tier, slot_label, default_loadout, compute_stats
 from .render import draw_shadow, draw_death, draw_explosion
 from .sprites import muzzle_offset, WALK_RATE, K
 
 KINDS = list(UNITS)
-COLUMNS = ("Turning", "Moving", "Attacking", "Pinned down", "Dying")
+COLUMNS = ("Turning", "Moving", "Attacking", "Pinned / Turret", "Dying")
+KNEEL_CYCLE = 4.0            # heavy infantry: kneel, fire for a while, stand up, repeat
 LABEL_W = 80
 CELL_W, CELL_H = 112, 56     # on-screen cell size
 TOP = 24
@@ -98,10 +100,11 @@ class MotionTest:
                 c["walk_x"] = min(max(c["walk_x"], margin), S.w - margin)
             c["walk_anim"] += dt
 
-            # Attacking: fire on the unit's real reload time at the dummy on the right.
+            # Attacking: fire on the unit's real reload time at the dummy on the right
+            # (heavy infantry only once they've knelt).
             c["lunge"] = max(0.0, c["lunge"] - dt)
             c["cooldown"] -= dt
-            if c["cooldown"] <= 0:
+            if c["cooldown"] <= 0 and self.ready_to_fire(kind):
                 c["cooldown"] = max(0.15, st["cooldown"])
                 c["lunge"] = 0.12
                 self.fire(kind, c, st, self.shooter_x(kind), 0.0, prone=False)
@@ -128,6 +131,8 @@ class MotionTest:
             for p in c["projectiles"]:
                 p["x"] += p["vx"] * dt
                 p["y"] += p["vy"] * dt
+                prog = min(1.0, max(0.0, (p["x"] - p["sx"]) / max(1.0, p["tx"] - p["sx"])))
+                p["h"] = p["arc"] * 4 * prog * (1 - prog)
                 if p["x"] >= p["tx"]:
                     p["done"] = True
                     c["booms"].append([p["tx"], p["ty"], 0.0])
@@ -152,6 +157,20 @@ class MotionTest:
     def shooter_x(self, kind):
         return 5 if UNITS[kind]["cls"] == "infantry" else 12
 
+    def kneel_state(self):
+        """(anim, frame) for heavy infantry in the attack column: kneel, fire, stand, repeat."""
+        p = self.t % KNEEL_CYCLE
+        if p < KNEEL_TIME / 2:
+            return "kneel", 0
+        if p < KNEEL_TIME:
+            return "kneel", 1
+        if p > KNEEL_CYCLE - 0.4:
+            return "idle", 0
+        return "kfire", None
+
+    def ready_to_fire(self, kind):
+        return kind != "heavy" or self.kneel_state()[0] == "kfire"
+
     def target_pos(self, kind):
         S = self.stages[kind]
         return S.w - 4, S.ground - (3 if UNITS[kind]["cls"] == "infantry" else 6)
@@ -161,21 +180,25 @@ class MotionTest:
         if UNITS[kind]["weapon"] is None:          # medic: heal pulse on the patient instead
             self.burst(c, x + 6, S.ground - 3, (130, 240, 130), 3, 6)
             return
-        dx, dy = muzzle_offset(kind, self.loadout(kind), facing, prone)
+        kneel = kind == "heavy" and not prone
+        dx, dy = muzzle_offset(kind, self.loadout(kind), facing, prone, 0.0, kneel)
         sx, sy = x + dx, S.ground + dy
         hit = self.rng.random() < st["accuracy"]
         tx, ty = self.target_pos(kind)
         if not hit:
             tx += self.rng.uniform(-2, 3)
             ty += self.rng.uniform(-4, 3)
-        if UNITS[kind]["weapon"] == "bullet":
+        weapon = st["weapon"]
+        if weapon == "bullet":
             c["shots"].append([sx, sy, tx, ty, 0.0])
             self.burst(c, tx, ty, (255, 230, 160) if hit else (200, 176, 130), 2, 12)
         else:
-            speed = (75 if UNITS[kind]["weapon"] == "rocket" else 105) * S.speed
+            spec = PROJECTILES[weapon]
+            speed = spec["speed"] * 0.5 * S.speed
             d = max(1.0, math.hypot(tx - sx, ty - sy))
-            c["projectiles"].append(dict(x=sx, y=sy, tx=tx, ty=ty, vx=(tx - sx) / d * speed,
-                                         vy=(ty - sy) / d * speed, style=UNITS[kind]["weapon"]))
+            c["projectiles"].append(dict(x=sx, y=sy, sx=sx, tx=tx, ty=ty, vx=(tx - sx) / d * speed,
+                                         vy=(ty - sy) / d * speed, style=weapon, h=0.0,
+                                         arc=spec["arc"] * 0.25 / S.zoom * 2))
 
     def burst(self, c, x, y, color, n, speed):
         for _ in range(n):
@@ -244,11 +267,21 @@ class MotionTest:
                 self.blit_unit(cell, kind, lo, "work", int(c["lunge"] > 0.05), 0, sx)
             else:
                 self.draw_dummy(cell, kind)
-                self.blit_unit(cell, kind, lo, "fire", int(c["lunge"] > 0.05), 0, sx)
+                anim, i = ("fire", None) if kind != "heavy" else self.kneel_state()
+                if i is None:
+                    i = int(c["lunge"] > 0.05)
+                self.blit_unit(cell, kind, lo, anim, i, 0, sx)
             self.draw_effects(cell, c, "fire")
         elif col == 3:                                # pinned: crawl, then shoot from the dirt
-            if not infantry:
-                draw_text(cell, "n/a", mid, 10, (150, 120, 90), shadow=None, align="center")
+            if not infantry:                          # vehicles: the turret traverses instead
+                if kind == "tank" and lo.get("weapon") == 2:
+                    self.blit_unit(cell, kind, lo, "idle", 0, 0, mid)
+                    draw_text(cell, "fixed gun", mid, 2, (120, 80, 50), shadow=None, align="center")
+                else:
+                    spr = self.sp.unit(kind, self.team, lo)
+                    draw_shadow(cell, mid, S.ground, UNITS[kind]["radius"])
+                    img, (ox, oy) = spr.frame("idle", 0, 0, (self.t * 60) % 360)
+                    cell.blit(img, (mid - ox, S.ground - oy))
                 return
             if (self.t % 4.0) < 2.5:
                 facing = 0 if c["crawl_dir"] > 0 else 180
@@ -283,13 +316,20 @@ class MotionTest:
             for tr in c["shots"]:
                 pygame.draw.line(cell, (255, 240, 170), (int(tr[0]), int(tr[1])), (int(tr[2]), int(tr[3])))
             for p in c["projectiles"]:
-                x, y = int(p["x"]), int(p["y"])
-                if p["style"] == "shell":
-                    pygame.draw.rect(cell, (255, 230, 140), (x - 1, y - 1, 2, 2))
-                else:
+                x, y = int(p["x"]), int(p["y"] - p["h"])
+                style = p["style"]
+                if p["arc"]:
+                    cell.fill((150, 120, 90), (int(p["x"]), int(p["y"]), 1, 1))
+                if style in ("rocket", "atgm"):
                     pygame.draw.line(cell, (220, 220, 220), (x, y), (x - 2, y))
                     if 0 <= x < w and 0 <= y < h:
                         cell.set_at((x, y), (255, 160, 60))
+                elif style == "grenade":
+                    cell.fill((50, 56, 40), (x, y, 1, 1))
+                elif style == "autocannon":
+                    pygame.draw.line(cell, (255, 230, 140), (x, y), (x - 2, y))
+                else:
+                    pygame.draw.rect(cell, (255, 230, 140), (x - 1, y - 1, 2, 2))
             for b in c["booms"]:
                 draw_explosion(cell, int(b[0]), int(b[1]), b[2] / 0.25, 2)
         for p in c["particles"]:

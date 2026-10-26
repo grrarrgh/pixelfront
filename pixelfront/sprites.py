@@ -8,7 +8,7 @@ import random
 import pygame
 
 from . import model3d as m3
-from .config import TILE, TEAM_COLORS, PLAYER, ENEMY, UNITS
+from .config import TILE, TEAM_COLORS, PLAYER, ENEMY, UNITS, KNEEL_TIME
 from .modules import default_loadout
 from .world import SAND, DUNE, ROCK, CLIFF
 
@@ -61,7 +61,7 @@ FACINGS = {"infantry": 8, "vehicle": 16}
 
 # Animation -> frame count. Infantry "prone"/"pfire" are the pinned-down crawl and prone firing.
 FRAMES = {
-    "infantry": dict(idle=1, walk=4, fire=2, work=2, prone=2, pfire=2, die=4),
+    "infantry": dict(idle=1, walk=4, fire=2, work=2, prone=2, pfire=2, kneel=2, kfire=2, die=4),
     "vehicle": dict(idle=1, walk=3, fire=2, die=1),
 }
 DEATH_STEPS = (0.08, 0.18, 0.3)   # seconds at which each infantry death frame ends
@@ -76,6 +76,10 @@ def unit_anim(u):
         if busy and u.order == "attack":
             return "pfire", int(firing)
         return "prone", int(u.anim * 4) % 2 if u.moving else 0
+    if u.kneeling:
+        if u.kneel < KNEEL_TIME:
+            return "kneel", int(u.kneel >= KNEEL_TIME / 2)
+        return ("kfire", int(firing)) if busy else ("kneel", 1)
     if busy:
         return ("fire" if u.order == "attack" else "work"), int(firing)
     if u.moving:
@@ -90,19 +94,19 @@ def death_frame(age):
     return len(DEATH_STEPS)
 
 
-def _render_unit(kind, light, lo, anim, i, facing):
+def _render_unit(kind, light, lo, anim, i, facing, turret=0.0):
     if UNITS[kind]["cls"] == "vehicle":
         build = m3.tank if kind == "tank" else m3.jeep
         darken = 1.0
         if anim == "walk":
-            b, _ = build(light, lo, phase=i, moving=True)
+            b, _ = build(light, lo, phase=i, moving=True, turret=turret)
         elif anim == "fire":
-            b, _ = build(light, lo, recoil=1.5 if i else 0, flash=bool(i))
+            b, _ = build(light, lo, recoil=1.5 if i else 0, flash=bool(i), turret=turret)
         elif anim == "die":
-            b, _ = build(light, lo, wreck=True)
+            b, _ = build(light, lo, wreck=True, turret=turret)
             darken = 0.4
         else:
-            b, _ = build(light, lo)
+            b, _ = build(light, lo, turret=turret)
         return m3.render(b, facing, darken=darken)
     b, _, fall, lift = m3.soldier(kind, light, lo, anim, i)
     return m3.render(b, facing, fall, lift, scale=m3.INF_SCALE, ss=m3.INF_SS)
@@ -124,22 +128,25 @@ class UnitSprite:
     def facing_index(self, angle):
         return int(round(angle / (360 / self.facings))) % self.facings
 
-    def frame(self, anim, i, angle):
-        """(surface, origin) for animation `anim`, frame i, facing `angle` degrees."""
+    def frame(self, anim, i, angle, turret=0.0):
+        """(surface, origin) for animation `anim`, frame i, facing `angle` degrees; vehicles
+        also take the turret's angle relative to the hull."""
         if anim not in self.frames:
             anim = "fire" if anim == "work" else "idle"
         i %= self.frames[anim]
         fi = self.facing_index(angle)
-        key = (anim, i, fi)
+        ti = self.facing_index(turret) if self.cls == "vehicle" else 0
+        key = (anim, i, fi, ti)
         got = self._cache.get(key)
         if got is None:
+            step = 360 / self.facings
             got = self._cache[key] = _render_unit(self.kind, self.light, self.loadout, anim, i,
-                                                  fi * 360 / self.facings)
+                                                  fi * step, ti * step)
         return got
 
-    def flash(self, anim, i, angle):
+    def flash(self, anim, i, angle, turret=0.0):
         """White silhouette of a frame, for hit flashes."""
-        surf, origin = self.frame(anim, i, angle)
+        surf, origin = self.frame(anim, i, angle, turret)
         key = id(surf)
         got = self._flash.get(key)
         if got is None:
@@ -154,20 +161,23 @@ class UnitSprite:
 _muzzles = {}
 
 
-def muzzle_offset(kind, loadout, angle, prone=False):
-    """Screen offset from a unit's position to its gun muzzle at this facing."""
-    key = (kind, tuple(sorted(loadout.items())), prone)
-    point = _muzzles.get(key)
+def muzzle_offset(kind, loadout, angle, prone=False, turret=0.0, kneel=False):
+    """Screen offset from a unit's position to its gun muzzle at this facing (and, for
+    vehicles, this turret angle relative to the hull)."""
     vehicle = UNITS[kind]["cls"] == "vehicle"
+    n = FACINGS["vehicle" if vehicle else "infantry"]
+    step = 360 / n
+    tq = round(turret / step) * step if vehicle else 0.0
+    key = (kind, tuple(sorted(loadout.items())), prone, kneel, tq)
+    point = _muzzles.get(key)
     if point is None:
         if vehicle:
-            _, mz = (m3.tank if kind == "tank" else m3.jeep)((0, 0, 0), loadout)
+            _, mz = (m3.tank if kind == "tank" else m3.jeep)((0, 0, 0), loadout, turret=tq)
         else:
-            _, mz, _, _ = m3.soldier(kind, (0, 0, 0), loadout, "pfire" if prone else "fire", 0)
+            anim = "pfire" if prone else "kfire" if kneel else "fire"
+            _, mz, _, _ = m3.soldier(kind, (0, 0, 0), loadout, anim, 0)
         point = _muzzles[key] = mz or (0, 0, 10)
-    n = FACINGS["vehicle" if vehicle else "infantry"]
-    snapped = round(angle / (360 / n)) * (360 / n)
-    return m3.project(point, snapped, 1.0 if vehicle else m3.INF_SCALE)
+    return m3.project(point, round(angle / step) * step, 1.0 if vehicle else m3.INF_SCALE)
 
 
 # ---- buildings -------------------------------------------------------------

@@ -27,8 +27,8 @@ Destroy every enemy building to win. Lose all of yours and it's over.
   to capture it (more units capture faster, up to 3). An enemy-owned derrick has to be
   neutralized before you can take it. Each derrick pays +2 credits/s; each Command Center +1/s.
 - **Command Center** trains **Engineers**, who build, repair buildings and vehicles, and capture.
-- **Barracks** trains **Riflemen**, **Medics** (heal nearby infantry) and **Heavy Infantry** (rockets, strong vs vehicles).
-- **Vehicle Yard** builds **Jeeps** (fast, machine gun) and **Tanks** (armored, big gun).
+- **Barracks** trains **Riflemen**, **Medics** (heal infantry they touch) and **Heavy Infantry** (armoured heavy weapons team).
+- **Vehicle Yard** builds **Jeeps** (fast, mounted weapon) and **Tanks** (armoured, big gun). Their weapons sit in turrets that traverse independently of the hull.
 
 ### Unit design
 
@@ -41,21 +41,30 @@ three module slots, and every choice has a trade-off:
 | Weapon | Weaker, faster firing, cheaper | Standard | Hits harder, reaches further, slow to reload and carry |
 | Speed | Slower but tougher, cheaper | Standard | Much faster but fragile, pricier |
 
-Riflemen weapons are special: **Light** is a pistol (accurate, short range), **Medium** a rifle,
-**Heavy** a machine gun (huge firepower, inaccurate, slows the gunner). For medics and engineers
-the weapon slot is the bag they carry: satchel, kit case or backpack.
+Some units' weapon tiers are real, distinct weapons:
+
+| Unit | Light | Medium (default) | Heavy |
+| --- | --- | --- | --- |
+| Rifleman | Pistol | Rifle | Machine gun |
+| Heavy Infantry | M60 | Grenade launcher | Shoulder rocket launcher |
+| Jeep | M2 Browning | UAG-40 automatic grenade launcher | Twin wire-guided missiles |
+| Tank | Bushmaster II 30mm autocannon | 120mm cannon | 155mm artillery (fixed gun: the tank turns to aim) |
+
+For medics and engineers the weapon slot is the bag they carry: satchel, kit case or backpack.
+Heavy infantry armour runs from helmet and body armour (Light) to full body armour (Medium) to
+full body armour plus a ballistic shield (Heavy). Heavy infantry kneel before they fire.
 
 Units are trained with the design that was current when you queued them, and look the part:
 
-- **Infantry armour:** Light = no helmet or body armour, Medium = helmet and body armour,
-  Heavy = adds shoulder, elbow and knee plates.
+- **Infantry armour:** Light = no helmet or body armour (a team bandana on the arm), Medium =
+  helmet and body armour, Heavy = adds shoulder, elbow and knee plates.
 - **Vehicle armour:** more plating, same size.
 - **Vehicle speed:** Fast = wheels, Normal = half-tracks, Slow = full tracks.
 
 ### Suppression
 
 Infantry under heavy fire, especially machine guns or nearby explosions, get pinned down. They
-go prone and crawl: slower, less accurate, but they take half damage from bullets. Medics and
+go prone and crawl: slower, less accurate and at 60% range, but they take half damage from bullets. Medics and
 engineers have to be touching whoever or whatever they heal, repair or build.
 
 ### Test range and motion test

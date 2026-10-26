@@ -62,7 +62,7 @@ class App:
     def open_design(self):
         b = next((e for e in self.ctrl.own() if e.is_building and e.complete), None)
         if b is not None:
-            self.design = DesignScreen(self.game, self.sprites, b)
+            self.design = DesignScreen(self.game, self.sprites, b, self.renderer.terrain)
             self.state = "design"
 
     def run(self):

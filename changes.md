@@ -2,6 +2,38 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.5.0 "Heavy Metal" (2026-10-26)
+
+Real weapons for heavy infantry, jeeps and tanks, turrets that traverse, and new firing stances.
+
+### Added
+
+- Heavy infantry weapon tiers: Light = M60 machine gun, Medium = M32-style grenade launcher, Heavy = shoulder rocket launcher.
+- Jeep weapon tiers: Light = M2 Browning heavy machine gun, Medium = UAG-40 automatic grenade launcher, Heavy = twin wire-guided missile launchers.
+- Tank weapon tiers: Light = Bushmaster II 30mm autocannon, Medium = 120mm cannon, Heavy = 155mm artillery.
+- Each weapon has its own model, matched to the real weapon as closely as the pixel size allows:
+  - M2: perforated barrel jacket and spade grips.
+  - UAG-40: chunky receiver, short fat barrel, linked grenades feeding in.
+  - Missile launchers: twin tubes on a guidance sight.
+  - Bushmaster: slim barrel with muzzle brake and ammo feed.
+  - 120mm: fume extractor and thermal sleeve.
+  - 155mm: long raised barrel, double-baffle muzzle brake, recuperators, turret bustle.
+- New projectile types:
+  - Lobbed grenades and artillery shells that arc, cast a ground shadow and burst over an area.
+  - Fast autocannon rounds.
+  - Wire-guided missiles that trail their guidance wire back to the launcher.
+- Turrets: tank turrets and the jeep's rear weapon station (gunner included) traverse to aim independently of the hull. The 155mm artillery is a fixed gun, so the whole tank turns to aim.
+- Heavy infantry must kneel before firing; they stand up again to move.
+- Infantry fire while pinned down, prone, at 60% range.
+- Light-armour infantry wear a team-coloured bandana knotted round the left arm, so they still show their side.
+- Sprite motion test: vehicle rows show the turret traversing (the 155mm is labelled as a fixed gun), and heavy infantry kneel before firing.
+
+### Changed
+
+- Heavy infantry armour tiers all carry more plating: Light = helmet and body armour, Medium = full body armour, Heavy = full body armour plus a ballistic shield.
+- The design screen shows units smaller, standing on a patch of the actual map near the building.
+- Heavy infantry, jeeps and tanks now default to the grenade launcher, UAG-40 and 120mm respectively.
+
 ## 0.4.0 "Joints & Foundations" (2026-10-26)
 
 Buildings join units in the pre-rendered 3D style, infantry shrink to C&C proportions, and soldiers move with real joints.

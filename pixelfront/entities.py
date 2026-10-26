@@ -2,7 +2,8 @@
 import math
 
 from .config import (TILE, UNITS, BUILDINGS, NEUTRAL, INTERACT, REPAIR_RATE, POINT_SIGHT, PRONE_SPEED,
-                     SUPPRESS_ON, SUPPRESS_OFF, SUPPRESS_DECAY, SUPPRESS_CALM)
+                     SUPPRESS_ON, SUPPRESS_OFF, SUPPRESS_DECAY, SUPPRESS_CALM, PRONE_RANGE,
+                     TURRET_SPEED, KNEEL_TIME)
 from .modules import compute_stats, default_loadout
 from .pathfinding import find_path
 
@@ -118,7 +119,7 @@ class Unit(Entity):
         self.is_vehicle = base["cls"] == "vehicle"
         self.is_infantry = not self.is_vehicle
         self.radius = base["radius"]
-        self.weapon = base["weapon"]
+        self.weapon = st["weapon"]   # the loadout can swap the weapon type
         self.supply = base["supply"]
         self.max_hp = self.hp = max(1, round(st["hp"]))
         self.armor = round(st["armor"])
@@ -156,6 +157,14 @@ class Unit(Entity):
         self.suppressed = False
         self.calm = 0.0
 
+        # Vehicles aim a turret (absolute degrees) independently of the hull, except
+        # fixed-gun artillery, which has to turn the whole vehicle.
+        self.has_turret = self.is_vehicle and self.weapon != "artillery"
+        self.turret = self.facing
+        self.aiming = False
+        # Heavy infantry kneel before firing; this counts up to KNEEL_TIME while they settle.
+        self.kneel = 0.0
+
     def rect(self):
         r = self.radius
         return (self.x - r, self.y - r, self.x + r, self.y + r)
@@ -166,12 +175,38 @@ class Unit(Entity):
 
     def muzzle_pos(self):
         from .sprites import muzzle_offset  # geometry lives with the 3D models
-        dx, dy = muzzle_offset(self.kind, self.loadout, self.facing, self.suppressed)
+        dx, dy = muzzle_offset(self.kind, self.loadout, self.facing, self.suppressed,
+                               self.turret - self.facing if self.has_turret else 0.0, self.kneeling)
         return self.x + dx, self.y + dy
 
     @property
     def move_speed(self):
         return self.speed * (PRONE_SPEED if self.suppressed else 1.0)
+
+    @property
+    def kneeling(self):
+        return self.kind == "heavy" and self.kneel > 0 and not self.suppressed
+
+    @property
+    def attack_range(self):
+        return self.range * (PRONE_RANGE if self.suppressed else 1.0)
+
+    def aim_at(self, x, y, dt):
+        """Turn the turret (or hull, for fixed guns) towards a point. Returns True once on target."""
+        want = math.degrees(math.atan2(y - self.y, x - self.x)) % 360
+        if not self.has_turret:
+            self.face(x, y)
+            return True
+        diff = (want - self.turret + 180) % 360 - 180
+        step = TURRET_SPEED * dt
+        self.turret = want if abs(diff) <= step else (self.turret + math.copysign(step, diff)) % 360
+        return abs(diff) <= 8
+
+    def _relax_turret(self, dt):
+        if self.has_turret:
+            diff = (self.facing - self.turret + 180) % 360 - 180
+            step = TURRET_SPEED * 0.5 * dt
+            self.turret = self.facing if abs(diff) <= step else (self.turret + math.copysign(step, diff)) % 360
 
     def suppress(self, amount):
         if not self.is_infantry:
@@ -322,7 +357,8 @@ class Unit(Entity):
         d = self.edge_dist(target)
         if d <= reach:
             self.path = []
-            self.face(target.x, target.y)
+            if not self.has_turret:   # turreted vehicles aim with the turret, not the hull
+                self.face(target.x, target.y)
             return True
         if d < 12:
             self.step_toward(game, target.x, target.y, dt)
@@ -343,9 +379,13 @@ class Unit(Entity):
         self.lunge = max(0.0, self.lunge - dt)
         self._update_suppression(dt)
         self.moving = False
+        self.aiming = False
         getattr(self, "do_" + self.order)(game, dt)
         if self.moving:
             self.anim += dt * self.move_speed / self.speed
+            self.kneel = 0.0   # heavy infantry stand up to move
+        if not self.aiming:
+            self._relax_turret(dt)
 
     def do_idle(self, game, dt):
         if self.kind == "engineer" or self.passive:
@@ -401,7 +441,14 @@ class Unit(Entity):
         if t is None or not t.alive:
             self._target_gone(game)
             return
-        if self.chase(game, t, self.range, dt) and self.cooldown <= 0:
+        if not self.chase(game, t, self.attack_range, dt):
+            return
+        self.aiming = True
+        on_target = self.aim_at(t.x, t.y, dt)
+        if self.kind == "heavy" and not self.suppressed and self.kneel < KNEEL_TIME:
+            self.kneel += dt   # kneel down before the first shot
+            return
+        if on_target and self.cooldown <= 0:
             self.cooldown = self.attack_time
             self.lunge = 0.12
             game.attack(self, t)
@@ -453,44 +500,79 @@ class Unit(Entity):
                 self.lunge = 0.12
 
 
+# Projectile kinds. speed in px/s; arc = peak height in px (0 = flies straight and homes in on
+# its target; arcing shots are lobbed at the spot the target stood on); splash = blast radius
+# in px (0 = direct hit only); boom = explosion size drawn; trail = what it leaves behind.
+PROJECTILES = {
+    "rocket":     dict(speed=150, arc=0, splash=0, boom=5, trail="smoke"),
+    "atgm":       dict(speed=130, arc=0, splash=0, boom=6, trail="wire"),
+    "shell":      dict(speed=220, arc=0, splash=0, boom=6, trail=None),
+    "autocannon": dict(speed=320, arc=0, splash=5, boom=2, trail=None),
+    "grenade":    dict(speed=100, arc=14, splash=12, boom=5, trail=None),
+    "artillery":  dict(speed=120, arc=55, splash=22, boom=10, trail="smoke"),
+}
+
+
 class Projectile:
-    SPEED = {"rocket": 150, "shell": 210}
+    """Flies over the ground at (gx, gy) at height h; drawn at (x, y) = (gx, gy - h)."""
 
     def __init__(self, source, target, damage, style, start, miss_offset=None):
+        spec = PROJECTILES[style]
         self.source = source
         self.target = target
         self.damage = damage
         self.style = style
-        self.speed = self.SPEED[style]
+        self.team = source.team
+        self.vs_vehicle = source.vs_vehicle
+        self.speed, self.arc, self.splash = spec["speed"], spec["arc"], spec["splash"]
+        self.boom, self.trail = spec["boom"], spec["trail"]
+        self.gx, self.gy = source.x, source.y
+        self.h0 = self.h = max(0.0, source.y - start[1])
         self.x, self.y = start
+        # Misses and lobbed shots fly at a fixed spot; straight hits home in on the target.
+        self.locked = self.arc > 0 or miss_offset is not None
+        mx, my = miss_offset or (0.0, 0.0)
+        self.aim = (target.x + mx, target.y + my)
+        self.total = max(1.0, math.hypot(self.aim[0] - self.gx, self.aim[1] - self.gy))
         a = math.radians(source.facing)
         self.dx, self.dy = math.cos(a), math.sin(a)
-        # A miss flies at a fixed spot near where the target stood and hurts nobody.
-        self.miss_at = None if miss_offset is None else (target.x + miss_offset[0], target.y + miss_offset[1])
         self.alive = True
 
     def update(self, game, dt):
         t = self.target
-        if self.miss_at:
-            tx, ty = self.miss_at
-        elif t.alive:
-            tx, ty = t.x, t.y - 3
-        else:
-            self.alive = False
-            return
-        dx, dy = tx - self.x, ty - self.y
+        if not self.locked:
+            if t.alive:
+                self.aim = (t.x, t.y)
+            else:
+                self.locked = True
+        ax, ay = self.aim
+        dx, dy = ax - self.gx, ay - self.gy
         d = math.hypot(dx, dy)
         step = self.speed * dt
-        if d <= step + 1:
-            if not self.miss_at:
-                game.damage(t, self.damage, self.source)
-            game.blast(self.x, self.y + 3)
-            game.puff(self.x, self.y, (250, 170, 60), 8 if self.style == "shell" else 5, 45)
-            game.puff(self.x, self.y, (200, 180, 140), 4, 25)
-            self.alive = False
+        if d <= step:
+            self.gx, self.gy = ax, ay
+            self.explode(game)
             return
         self.dx, self.dy = dx / d, dy / d
-        self.x += self.dx * step
-        self.y += self.dy * step
-        if self.style == "rocket" and game.rng.random() < 0.5:
-            game.particles.append([self.x, self.y, 0, -8, 0.4, (190, 180, 170), 0.0])
+        self.gx += self.dx * step
+        self.gy += self.dy * step
+        progress = min(1.0, max(0.0, 1 - (d - step) / self.total))
+        if self.arc:
+            self.h = self.h0 * (1 - progress) + self.arc * 4 * progress * (1 - progress)
+        else:
+            self.h = 3 + (self.h0 - 3) * (1 - progress)
+        self.x, self.y = self.gx, self.gy - self.h
+        if self.trail == "smoke" and game.rng.random() < 0.6:
+            game.particles.append([self.x, self.y, 0, -8, 0.5, (190, 180, 170), 0.0])
+
+    def explode(self, game):
+        self.alive = False
+        x, y = self.gx, self.gy
+        t = self.target
+        if self.splash:
+            game.splash(x, y, self.splash, self.damage, self.vs_vehicle, self.team, self.source)
+        elif not self.locked and t.alive:
+            game.damage(t, self.damage * (self.vs_vehicle if t.is_vehicle else 1.0), self.source)
+        game.blast(x, y, max(self.splash, 14))
+        game.boom(x, y - 2, self.boom)
+        game.puff(x, y - 2, (200, 180, 140), 3 + self.boom, 20 + self.boom * 3)

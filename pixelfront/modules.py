@@ -52,6 +52,41 @@ UNIT_TIERS = {
              mul={"damage": 0.8, "cooldown": 0.3, "range": 1.1, "speed": 0.72},
              add={"accuracy": -0.2}, cost=0.5, time=0.3),
     ],
+    # Weapon tiers that swap the weapon itself use `set` (applied before any mul/add).
+    ("heavy", "weapon"): [
+        dict(name="Light", desc="M60 machine gun: rapid fire that pins infantry down; weak vs armour.",
+             set={"weapon": "bullet", "damage": 5, "cooldown": 0.3, "range": 70, "accuracy": 0.6,
+                  "vs_vehicle": 1.0}, cost=-0.1, time=-0.1),
+        dict(name="Medium", desc="Grenade launcher: lobbed grenades that burst over a small area."),
+        dict(name="Heavy", desc="Shoulder rocket launcher: slow to reload, devastating vs vehicles.",
+             set={"weapon": "rocket", "damage": 24, "cooldown": 2.4, "range": 84, "accuracy": 0.9,
+                  "vs_vehicle": 1.75}, mul={"speed": 0.9}, cost=0.4, time=0.3),
+    ],
+    ("heavy", "armor"): [
+        dict(name="Light", desc="Helmet and body armour.", mul={"hp": 0.75, "speed": 1.1},
+             cost=-0.15, time=-0.1),
+        dict(name="Medium", desc="Helmet and full body armour."),
+        dict(name="Heavy", desc="Full body armour plus a ballistic shield.",
+             mul={"hp": 1.6, "speed": 0.8}, add={"armor": 2}, cost=0.5, time=0.3),
+    ],
+    ("jeep", "weapon"): [
+        dict(name="Light", desc="M2 Browning: heavy machine gun, fast and accurate.",
+             set={"weapon": "bullet", "damage": 7, "cooldown": 0.3, "range": 76, "accuracy": 0.8},
+             cost=-0.1, time=-0.1),
+        dict(name="Medium", desc="UAG-40 automatic grenade launcher: bursts of splashing grenades."),
+        dict(name="Heavy", desc="Twin wire-guided rockets: long range, deadly vs vehicles, slow to reload.",
+             set={"weapon": "atgm", "damage": 32, "cooldown": 2.8, "range": 110, "accuracy": 0.95,
+                  "vs_vehicle": 1.8}, cost=0.5, time=0.3),
+    ],
+    ("tank", "weapon"): [
+        dict(name="Light", desc="Bushmaster II 30mm autocannon: rapid bursts, good vs infantry and light vehicles.",
+             set={"weapon": "autocannon", "damage": 9, "cooldown": 0.35, "range": 84, "accuracy": 0.85,
+                  "vs_vehicle": 1.2}, cost=-0.15, time=-0.1),
+        dict(name="Medium", desc="120mm cannon: the all-round tank gun."),
+        dict(name="Heavy", desc="155mm artillery: huge range and blast, slow and inaccurate.",
+             set={"weapon": "artillery", "damage": 45, "cooldown": 4.0, "range": 160, "accuracy": 0.65,
+                  "vs_vehicle": 1.0}, mul={"speed": 0.85}, cost=0.6, time=0.4),
+    ],
 }
 
 # Stat key -> display name. Stats a unit doesn't have (base value 0) are hidden for it.
@@ -89,11 +124,15 @@ def base_stats(kind):
     st = {k: base.get(k, STAT_DEFAULTS.get(k, 0)) for k in STAT_NAMES}
     if not base.get("weapon"):
         st["accuracy"] = 0
+    st["weapon"] = base.get("weapon")
     return st
 
 
 def compute_stats(kind, loadout):
+    """Stats for a unit with this loadout, including "weapon" (the weapon type it fires)."""
     st = base_stats(kind)
+    for slot, level in loadout.items():
+        st.update(tier(kind, slot, level).get("set", {}))
     for slot, level in loadout.items():
         t = tier(kind, slot, level)
         for k, v in t.get("mul", {}).items():
@@ -137,6 +176,9 @@ def tier_effects(kind, slot, level):
     t = tier(kind, slot, level)
     base = base_stats(kind)
     out = []
+    for k, v in t.get("set", {}).items():
+        if k in STAT_NAMES and v != base[k]:
+            out.append(f"{STAT_NAMES[k]} {format_stat(k, v)}")
     for k, v in t.get("mul", {}).items():
         if base[k]:
             out.append(f"{(v - 1) * 100:+.0f}% {STAT_NAMES[k]}")

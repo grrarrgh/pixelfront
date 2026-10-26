@@ -7,6 +7,8 @@ from .config import (TILE, PLAYER, ENEMY, NEUTRAL, UNITS, BUILDINGS, START_CREDI
                      BASE_INCOME, POINT_INCOME, CAPTURE_TIME, CAPTURE_RADIUS, MAX_CAPTURERS,
                      SUPPRESS_PER_SHOT, SUPPRESS_EXPLOSIVE, SUPPRESS_RADIUS, PRONE_BULLET_DAMAGE, PRONE_ACCURACY)
 from .entities import Unit, Building, CapturePoint, Projectile, dist_point_rect
+
+BOOM_TIME = 0.35  # seconds an explosion flash lasts
 from .modules import default_loadout, loadout_cost, loadout_time
 from .world import generate
 from .fog import Fog
@@ -41,6 +43,7 @@ class Game:
         self.units, self.buildings, self.points = [], [], []
         self.projectiles = []
         self.tracers = []    # [x1, y1, x2, y2, age]
+        self.booms = []      # [x, y, start time, radius]
         self.particles = []  # [x, y, vx, vy, life, colour]
         self.decals = []
         self.messages = []
@@ -167,6 +170,7 @@ class Game:
         for tr in self.tracers:
             tr[4] += dt
         self.tracers = [tr for tr in self.tracers if tr[4] < 0.07]
+        self.booms = [b for b in self.booms if self.time - b[2] < BOOM_TIME]
         self.decals = [d for d in self.decals if self.time - d["t"] < d["life"]]
         self.messages = [m for m in self.messages if self.time - m[1] < 6]
 
@@ -448,13 +452,28 @@ class Game:
             if hit:
                 self.damage(target, amount, attacker, bullet=True)
         else:
-            self.projectiles.append(Projectile(attacker, target, amount, attacker.weapon, start, miss))
+            self.projectiles.append(Projectile(attacker, target, attacker.damage, attacker.weapon, start, miss))
 
-    def blast(self, x, y):
+    def blast(self, x, y, radius=SUPPRESS_RADIUS):
         """Explosions pin down any infantry close by."""
         for u in self.units:
-            if u.is_infantry and math.hypot(u.x - x, u.y - y) <= SUPPRESS_RADIUS:
+            if u.is_infantry and math.hypot(u.x - x, u.y - y) <= radius:
                 u.suppress(SUPPRESS_EXPLOSIVE)
+
+    def splash(self, x, y, radius, damage, vs_vehicle, team, source):
+        """Area damage: full at the centre, half at the edge, enemies only."""
+        for u in list(self.units):
+            d = math.hypot(u.x - x, u.y - y) - u.radius
+            if u.team != team and u.alive and d <= radius:
+                f = 1 - 0.5 * max(0.0, d) / radius
+                self.damage(u, damage * f * (vs_vehicle if u.is_vehicle else 1.0), source)
+        for b in list(self.buildings):
+            if b.team != team and b.alive and dist_point_rect(x, y, b.rect()) <= radius:
+                self.damage(b, damage * 0.75, source)
+
+    def boom(self, x, y, r):
+        """An explosion flash for the renderer to draw."""
+        self.booms.append([x, y, self.time, r])
 
     def damage(self, target, amount, attacker=None, bullet=False):
         if not target.alive or target.team == NEUTRAL:
@@ -495,7 +514,8 @@ class Game:
                 e.build_plan = None
             # The renderer animates these: infantry topple and fade, vehicles blow up and smoulder.
             death = dict(x=e.x, y=e.y, t=self.time, unit=e.kind, team=e.team, loadout=e.loadout,
-                         facing=e.facing, r=e.radius, prone=e.suppressed)
+                         facing=e.facing, r=e.radius, prone=e.suppressed,
+                         turret=e.turret - e.facing if e.has_turret else 0.0)
             if e.is_vehicle:
                 self.decals.append(dict(death, kind="wreck", life=30))
                 self.puff(e.x, e.y - 4, (255, 220, 120), 10, 70)

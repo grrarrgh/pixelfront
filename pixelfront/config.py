@@ -41,9 +41,14 @@ SUPPRESS_CALM = 1.0
 PRONE_SPEED = 0.35         # speed multiplier while crawling
 PRONE_BULLET_DAMAGE = 0.5  # bullet damage multiplier while prone
 PRONE_ACCURACY = 0.75      # accuracy multiplier while pinned
+PRONE_RANGE = 0.6          # weapon range multiplier while firing prone
+
+TURRET_SPEED = 160         # degrees per second a turret (or mounted gun) traverses
+KNEEL_TIME = 0.5           # seconds heavy infantry take to kneel before they can fire
 
 # Base stats, before loadout modules (see modules.py). "cls" is infantry or vehicle.
-# weapon: "bullet" hits instantly, "rocket"/"shell" fire projectiles, None = unarmed.
+# weapon: "bullet" hits instantly; "rocket", "atgm", "shell", "autocannon", "grenade" and
+# "artillery" fire projectiles (see entities.PROJECTILES); None = unarmed.
 UNITS = {
     "engineer": dict(name="Engineer", cls="infantry", hp=40, armor=0, damage=3, range=40, cooldown=1.0,
                      weapon="bullet", speed=38, sight=5, work=1.0, cost=75, time=9, supply=1,
@@ -56,12 +61,12 @@ UNITS = {
                   weapon=None, speed=42, sight=6, cost=70, time=9, supply=1,
                   radius=4, height=13, hotkey="m", desc="Heals nearby infantry.",
                   slot_labels={"weapon": "Medkit"}),
-    "heavy": dict(name="Heavy Infantry", cls="infantry", hp=80, armor=1, damage=18, range=72, cooldown=2.2,
-                  weapon="rocket", vs_vehicle=1.75, accuracy=0.9, speed=32, sight=6, cost=110, time=12, supply=1,
-                  radius=4, height=13, hotkey="h", desc="Rockets. Strong vs vehicles."),
-    "jeep": dict(name="Jeep", cls="vehicle", hp=110, armor=1, damage=5, range=72, cooldown=0.35,
-                 weapon="bullet", accuracy=0.75, speed=72, sight=8, cost=120, time=12, supply=2,
-                 radius=9, height=19, hotkey="j", desc="Fast scout with a machine gun."),
+    "heavy": dict(name="Heavy Infantry", cls="infantry", hp=80, armor=1, damage=14, range=80, cooldown=1.6,
+                  weapon="grenade", accuracy=0.8, speed=32, sight=6, cost=110, time=12, supply=1,
+                  radius=4, height=13, hotkey="h", desc="Armoured heavy weapons team."),
+    "jeep": dict(name="Jeep", cls="vehicle", hp=110, armor=1, damage=10, range=84, cooldown=0.6,
+                 weapon="grenade", accuracy=0.75, speed=72, sight=8, cost=120, time=12, supply=2,
+                 radius=9, height=19, hotkey="j", desc="Fast scout with a mounted weapon."),
     "tank": dict(name="Tank", cls="vehicle", hp=300, armor=4, damage=30, range=88, cooldown=2.0,
                  weapon="shell", speed=30, sight=7, cost=250, time=20, supply=3,
                  radius=11, height=21, hotkey="t", desc="Heavy armor and a big gun."),

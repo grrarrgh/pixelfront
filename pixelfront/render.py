@@ -2,6 +2,7 @@
 import pygame
 
 from .config import TILE, SCREEN_W, VIEW_H, PLAYER, NEUTRAL, BUILDINGS, TEAM_COLORS, UNITS
+from .game import BOOM_TIME as SHOT_BOOM_TIME
 from .sprites import K, render_terrain, unit_anim, death_frame, DEATH_STEPS
 
 SEL_COLORS = {PLAYER: (90, 230, 90), NEUTRAL: (240, 220, 90)}
@@ -17,6 +18,29 @@ def draw_shadow(surf, x, y, r, prone=False):
     sh = pygame.Surface((w, 5), pygame.SRCALPHA)
     pygame.draw.ellipse(sh, (60, 30, 10, 80), sh.get_rect())
     surf.blit(sh, (x - w // 2, y))
+
+
+def draw_projectile(surf, p, cx, cy):
+    """Draw one projectile; lobbed rounds get a ground shadow, wire-guided missiles their wire."""
+    x, y = int(p.x) - cx, int(p.y) - cy
+    if p.arc:   # ground shadow under a lobbed round
+        pygame.draw.rect(surf, (110, 86, 60), (int(p.gx) - cx, int(p.gy) - cy, 2, 1))
+    if p.trail == "wire" and p.source.alive:
+        sx, sy = p.source.muzzle_pos()
+        pygame.draw.line(surf, (200, 200, 190), (int(sx) - cx, int(sy) - cy), (x, y))
+    tail = (int(x - p.dx * 3), int(y - p.dy * 3))
+    if p.style in ("rocket", "atgm"):
+        pygame.draw.line(surf, (220, 220, 220), (x, y), tail)
+        pygame.draw.rect(surf, (255, 160, 60), (x, y, 1, 1))
+    elif p.style == "autocannon":
+        pygame.draw.line(surf, (255, 230, 140), (x, y), tail)
+    elif p.style == "grenade":
+        pygame.draw.rect(surf, (60, 66, 50), (x - 1, y - 1, 2, 2))
+    elif p.style == "artillery":
+        pygame.draw.rect(surf, (255, 230, 160), (x - 1, y - 1, 3, 3))
+        pygame.draw.rect(surf, (255, 255, 230), (x, y, 1, 1))
+    else:
+        pygame.draw.rect(surf, (255, 230, 140), (x - 1, y - 1, 2, 2))
 
 
 def draw_explosion(surf, x, y, k, r):
@@ -43,7 +67,7 @@ def draw_death(surf, sprites, d, age, x, y):
             img.set_alpha(int(255 * max(0.0, fade)))
         surf.blit(img, (x - ox, y - oy))
         return
-    img, (ox, oy) = spr.frame("die", 0, d["facing"])
+    img, (ox, oy) = spr.frame("die", 0, d["facing"], d.get("turret", 0.0))
     if fade < 1:
         img = img.copy()
         img.set_alpha(int(255 * max(0.0, fade)))
@@ -112,12 +136,9 @@ class Renderer:
             pygame.draw.line(view, (255, 240, 170), (int(tr[0]) - cx, int(tr[1]) - cy),
                              (int(tr[2]) - cx, int(tr[3]) - cy))
         for p in g.projectiles:
-            x, y = int(p.x) - cx, int(p.y) - cy
-            if p.style == "shell":
-                pygame.draw.rect(view, (255, 230, 140), (x - 1, y - 1, 2, 2))
-            else:
-                pygame.draw.line(view, (220, 220, 220), (x, y), (int(x - p.dx * 4), int(y - p.dy * 4)))
-                pygame.draw.rect(view, (255, 160, 60), (x, y, 1, 1))
+            draw_projectile(view, p, cx, cy)
+        for b in g.booms:
+            draw_explosion(view, int(b[0]) - cx, int(b[1]) - cy, (g.time - b[2]) / SHOT_BOOM_TIME, b[3])
         for p in g.particles:
             pygame.draw.rect(view, p[5], (int(p[0]) - cx, int(p[1]) - cy, 1, 1))
 
@@ -162,12 +183,13 @@ class Renderer:
     def draw_unit(self, view, u, cx, cy):
         spr = self.sp.unit(u.kind, u.team, u.loadout)
         anim, i = unit_anim(u)
+        turret = u.turret - u.facing if u.has_turret else 0.0
         x, y = int(u.x) - cx, int(u.y) - cy
         draw_shadow(view, x, y, u.radius, u.is_infantry and u.suppressed)
-        img, (ox, oy) = spr.frame(anim, i, u.facing)
+        img, (ox, oy) = spr.frame(anim, i, u.facing, turret)
         view.blit(img, (x - ox, y - oy))
         if u.flash > 0:
-            fl, _ = spr.flash(anim, i, u.facing)
+            fl, _ = spr.flash(anim, i, u.facing, turret)
             view.blit(fl, (x - ox, y - oy))
 
     def draw_decal(self, view, d, cx, cy):
