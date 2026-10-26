@@ -68,6 +68,25 @@ Units are trained with the design that was current when you queued them, and loo
 - **Vehicle speed:** Fast = wheels, Normal = half-tracks, Slow = full tracks. Front wheels steer into turns.
 - **Markings:** medics carry red crosses on white patches, engineers yellow and grey shoulder patches.
 
+### Weapons and armour
+
+Every weapon is one of three types:
+
+| Type | Weapons | Behaviour |
+| --- | --- | --- |
+| Bullets | Pistol, rifle, M60, M2 | Instant hits. Every round pins down the soldier it's aimed at. Moderate damage to jeeps, weak against tanks and buildings. |
+| Explosives | Grenade launcher, UAG-40, Bushmaster, 155mm | Splash damage. Pins down all infantry near the blast. Heavy damage to tanks and buildings. |
+| Anti-armour | Rocket launcher, TOW, 120mm | Big hits with a bonus against vehicles, and a small blast. |
+
+Armour ranks cut the damage each type does. Infantry go from unarmoured, to helmet and vest, to
+full body armour, to full body armour plus a ballistic shield. The shield stops about half of
+all bullets and explosive damage. Heavy infantry always wear one rank more than their tier
+name. Armoured infantry lying prone also shrug off a good part of any explosion. Vehicles have
+light, medium or heavy plating. The design screen lists each armour tier's damage cuts.
+
+Tank guns reload slowest of all. The Bushmaster fires fast 10-round bursts that wear a tank
+down slowly, but several of them together take one apart.
+
 ### Bunkers
 
 Engineers can build Bunkers. Right-click one with infantry to man it (up to 4). Soldiers inside
@@ -77,13 +96,17 @@ If it falls, the garrison is thrown clear.
 ### Suppression
 
 Infantry under heavy fire, especially machine guns or nearby explosions, get pinned down. They
-go prone and crawl at 60% speed, shooting less accurately and at 60% range, but they are only half as likely to be hit. Medics and
-engineers have to be touching whoever or whatever they heal, repair or build.
+go prone and crawl at 60% speed, shooting less accurately and at 60% range, but they are only
+half as likely to be hit. Pinned soldiers automatically crawl a few tiles directly away from
+whatever is pinning them, then carry on with their orders. A direct move order overrides this.
+While pinned they won't crawl towards enemies who are out of reach.
+
+Medics and engineers have to be touching whoever or whatever they heal, repair or build.
 
 ### Test range and motion test
 
 - **T** on the title screen: a sandbox with no AI, no fog, plenty of credits, a starter army, a
-  Command Center, Barracks and Vehicle Yard to train from (building and training are 10x faster),
+  Command Center, Barracks and Vehicle Yard to train from (building and training are 10x faster than normal),
   and passive enemy targets of every type and loadout. **F5** respawns the targets.
 - **M** on the title screen: the sprite motion test. Every unit loops through turning, moving,
   attacking, pinned-down and dying animations. **1/2/3** cycle the Armor, Weapon and Speed tiers,
@@ -117,11 +140,13 @@ engineers have to be touching whoever or whatever they heal, repair or build.
 
 | File | Purpose |
 | --- | --- |
-| `pixelfront/config.py` | Resolution, economy, unit and building base stats |
+| `pixelfront/config.py` | Resolution, economy, suppression, building stats |
+| `pixelfront/units/` | One file per unit type (`rifleman.py`, `tank.py`, ...) with its stats, weapon tiers and special tiers. `registry.py` lists them; `unit.py` is the shared `Unit` behaviour (orders, movement, combat, suppression and retreating) |
+| `pixelfront/weapons.py` | Every weapon, the three weapon types, armour ranks, projectiles, and how firing, splash and suppression work |
 | `pixelfront/modules.py` | Loadout slots and tiers, and the stats/cost they produce |
 | `pixelfront/world.py` | Tile map and symmetric desert map generator |
 | `pixelfront/pathfinding.py` | A* on the tile grid |
-| `pixelfront/entities.py` | Units (order state machine), buildings, capture points, projectiles |
+| `pixelfront/entities.py` | Entity base class, buildings (incl. bunker garrison fire), capture points |
 | `pixelfront/game.py` | Simulation: economy, capturing, combat, construction, win check, test range |
 | `pixelfront/ai.py` | Computer opponent |
 | `pixelfront/fog.py` | Fog of war |
@@ -133,10 +158,23 @@ engineers have to be touching whoever or whatever they heal, repair or build.
 | `pixelfront/app.py` | Window, main loop, title/pause/design/game-over screens |
 | `pixelfront/log.py` | Per-run log files and crash logging |
 
+### Adding a weapon
+
+1. Add it to `WEAPONS` in `weapons.py` with a `type` (`bullet`, `explosive` or `anti_armor`) and
+   its numbers. Anything you leave out comes from the type's defaults.
+2. Put its id in a unit's `weapons` list (`units/<kind>.py`).
+3. Give it a look in `model3d.py`: models pick their gun by weapon id.
+
+### Adding a unit
+
+1. Write `units/<kind>.py` with a `UNIT` dict. Copy the closest existing unit.
+2. Add it to `UNITS` in `units/registry.py` and to a building's `trains` list in `config.py`.
+3. Give it a model in `model3d.py`.
+
 ### Adding a new module slot
 
 1. Add the slot and its tiers to `SLOTS` in `modules.py` (stats it changes must be in `STAT_NAMES`).
-2. Optionally give some units their own tiers via `UNIT_TIERS`.
+2. Optionally give some units their own tiers via `tiers` in their unit file.
 3. Optionally give it a look: read the slot's tier from the loadout in `soldier()`, `jeep()` or
    `tank()` in `model3d.py` and add boxes for it. Check it in the motion test (M).
 

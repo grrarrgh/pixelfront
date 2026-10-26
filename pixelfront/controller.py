@@ -3,9 +3,10 @@ import logging
 
 import pygame
 
-from .config import (SCREEN_W, SCREEN_H, VIEW_H, TILE, MAP_W, MAP_H, PLAYER, NEUTRAL, UNITS, BUILDINGS,
+from .config import (SCREEN_W, SCREEN_H, VIEW_H, TILE, MAP_W, MAP_H, PLAYER, NEUTRAL, BUILDINGS,
                      CAMERA_SPEED, EDGE_SCROLL)
 from .modules import loadout_cost, loadout_summary, loadout_time
+from .units import UNITS
 
 TARGET_MODES = ("move", "attack", "repair")
 

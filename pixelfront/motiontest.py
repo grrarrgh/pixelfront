@@ -8,12 +8,13 @@ import random
 
 import pygame
 
-from .config import SCREEN_W, PLAYER, ENEMY, UNITS, KNEEL_TIME, STEER_MAX
-from .entities import PROJECTILES
+from .config import SCREEN_W, PLAYER, ENEMY, KNEEL_TIME, STEER_MAX
+from .units import UNITS
 from .font import draw_text
-from .modules import SLOTS, slots_for, tiers, tier, slot_label, default_loadout, compute_stats
-from .render import draw_shadow, draw_death, draw_explosion
+from .modules import SLOTS, TIER_NAMES, weapon_of, slots_for, tiers, tier, slot_label, default_loadout, compute_stats
+from .render import draw_shadow, draw_death, draw_explosion, draw_tracer, TRACER_LIFE
 from .sprites import muzzle_offset, WALK_RATE, K
+from .weapons import weapon as weapon_def, PROJECTILE_STYLES
 
 KINDS = list(UNITS)
 COLUMNS = ("Turning", "Moving", "Attacking", "Pinned / Turret", "Dying")
@@ -71,7 +72,7 @@ class MotionTest:
             return "close"
         if ev.key in SLOT_KEYS:
             slot = SLOT_KEYS[ev.key]
-            self.levels[slot] = (self.levels[slot] + 1) % len(SLOTS[slot]["tiers"])
+            self.levels[slot] = (self.levels[slot] + 1) % len(TIER_NAMES)
         elif ev.key == pygame.K_TAB:
             self.team = ENEMY if self.team == PLAYER else PLAYER
         elif ev.key == pygame.K_SPACE:
@@ -127,7 +128,7 @@ class MotionTest:
 
             for tr in c["shots"]:
                 tr[4] += dt
-            c["shots"] = [tr for tr in c["shots"] if tr[4] < 0.07]
+            c["shots"] = [tr for tr in c["shots"] if tr[4] < TRACER_LIFE]
             for p in c["projectiles"]:
                 p["x"] += p["vx"] * dt
                 p["y"] += p["vy"] * dt
@@ -169,7 +170,7 @@ class MotionTest:
         return "kfire", None
 
     def ready_to_fire(self, kind):
-        return kind != "heavy" or self.kneel_state()[0] == "kfire"
+        return not UNITS[kind].get("kneels") or self.kneel_state()[0] == "kfire"
 
     def target_pos(self, kind):
         S = self.stages[kind]
@@ -180,7 +181,7 @@ class MotionTest:
         if UNITS[kind]["weapon"] is None:          # medic: heal pulse on the patient instead
             self.burst(c, x + 6, S.ground - 3, (130, 240, 130), 3, 6)
             return
-        kneel = kind == "heavy" and not prone
+        kneel = UNITS[kind].get("kneels") and not prone
         dx, dy = muzzle_offset(kind, self.loadout(kind), facing, prone, 0.0, kneel)
         sx, sy = x + dx, S.ground + dy
         hit = self.rng.random() < st["accuracy"]
@@ -188,16 +189,16 @@ class MotionTest:
         if not hit:
             tx += self.rng.uniform(-2, 3)
             ty += self.rng.uniform(-4, 3)
-        weapon = st["weapon"]
-        if weapon == "bullet":
+        style = weapon_def(st["weapon"])["projectile"]
+        if style is None:   # bullets: instant tracer
             c["shots"].append([sx, sy, tx, ty, 0.0])
             self.burst(c, tx, ty, (255, 230, 160) if hit else (200, 176, 130), 2, 12)
         else:
-            spec = PROJECTILES[weapon]
+            spec = PROJECTILE_STYLES[style]
             speed = spec["speed"] * 0.5 * S.speed
             d = max(1.0, math.hypot(tx - sx, ty - sy))
             c["projectiles"].append(dict(x=sx, y=sy, sx=sx, tx=tx, ty=ty, vx=(tx - sx) / d * speed,
-                                         vy=(ty - sy) / d * speed, style=weapon, h=0.0,
+                                         vy=(ty - sy) / d * speed, style=style, h=0.0,
                                          arc=spec["arc"] * 0.25 / S.zoom * 2))
 
     def burst(self, c, x, y, color, n, speed):
@@ -212,7 +213,7 @@ class MotionTest:
     def draw(self, surf):
         surf.fill((34, 30, 38))
         draw_text(surf, "Sprite motion test", 6, 4, (250, 220, 110))
-        tiers_txt = "   ".join(f"[{i}] {SLOTS[s]['label']}: {SLOTS[s]['tiers'][self.levels[s]]['name']}"
+        tiers_txt = "   ".join(f"[{i}] {SLOTS[s]['label']}: {TIER_NAMES[self.levels[s]]}"
                                for i, s in enumerate(SLOTS, 1))
         draw_text(surf, tiers_txt, 120, 4, (230, 230, 230))
         draw_text(surf, "[Tab] team  [Space] pause  [R] reset  [Esc] back", SCREEN_W - 6, 4,
@@ -273,14 +274,14 @@ class MotionTest:
                 self.blit_unit(cell, kind, lo, "work", int(c["lunge"] > 0.05), 0, sx)
             else:
                 self.draw_dummy(cell, kind)
-                anim, i = ("fire", None) if kind != "heavy" else self.kneel_state()
+                anim, i = ("fire", None) if not UNITS[kind].get("kneels") else self.kneel_state()
                 if i is None:
                     i = int(c["lunge"] > 0.05)
                 self.blit_unit(cell, kind, lo, anim, i, 0, sx)
             self.draw_effects(cell, c, "fire")
         elif col == 3:                                # pinned: crawl, then shoot from the dirt
             if not infantry:                          # vehicles: the turret traverses instead
-                if kind == "tank" and lo.get("weapon") == 2:
+                if weapon_def(weapon_of(kind, lo))["fixed"]:
                     self.blit_unit(cell, kind, lo, "idle", int(self.t * 10), 0, mid)
                     draw_text(cell, "fixed gun", mid, 2, (120, 80, 50), shadow=None, align="center")
                 else:
@@ -320,7 +321,7 @@ class MotionTest:
         w, h = cell.get_size()
         if which == "fire":
             for tr in c["shots"]:
-                pygame.draw.line(cell, (255, 240, 170), (int(tr[0]), int(tr[1])), (int(tr[2]), int(tr[3])))
+                draw_tracer(cell, *tr)
             for p in c["projectiles"]:
                 x, y = int(p["x"]), int(p["y"] - p["h"])
                 style = p["style"]

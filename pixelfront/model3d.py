@@ -9,6 +9,9 @@ import math
 
 import pygame
 
+from .modules import weapon_of
+from .weapons import weapon as weapon_def
+
 ELEVATION = math.radians(42)            # camera angle above the horizon
 SIN_E, COS_E = math.sin(ELEVATION), math.cos(ELEVATION)
 VIEW = (0.0, COS_E, SIN_E)              # towards the camera (south and up)
@@ -255,27 +258,26 @@ KNEEL_LEGS = {1: (85, -88), -1: (-12, -98)}   # front (left) leg and back (right
 KNEEL_DROP = 3.6                               # how far the body sinks when kneeling
 
 
-def _hold(kind, weapon, act, shield=False):
-    """Arm angles {side: (shoulder, elbow)} for how this soldier holds their kit."""
-    if kind == "engineer" and act == "fire":
-        kind, weapon = "rifleman", 0
-    if kind == "heavy":
-        # M60 at the hip, grenade launcher at the shoulder, rocket tube on the shoulder;
-        # with a shield the left arm holds the shield instead.
-        hold = {0: {-1: (10, 70), 1: (30, 60)}, 1: {-1: (30, 70), 1: (45, 50)},
-                2: {-1: (20, 110), 1: (60, 70)}}[weapon]
-        if shield:
-            hold = {**hold, 1: (35, 55)}
-        return hold
-    if kind == "rifleman":
-        if weapon == 0:
-            return {-1: (88, 0) if act == "fire" else (30, 45), 1: (0, 15)}
-        if weapon == 2:
-            return {-1: (10, 70), 1: (30, 60)}
-        return {-1: (30, 70), 1: (45, 50)} if act != "fire" else {-1: (40, 70), 1: (55, 45)}
-    if act == "work":
-        return {1: (80, 10), -1: (5, 15)}
-    return {1: (0, 15), -1: (0, 15)}
+def _hold(gun, act, shield=False):
+    """Arm angles {side: (shoulder, elbow)} for how this soldier holds their gun (or kit, when
+    gun is None)."""
+    if gun == "pistol":
+        hold = {-1: (88, 0) if act == "fire" else (30, 45), 1: (0, 15)}
+    elif gun == "rifle":
+        hold = {-1: (30, 70), 1: (45, 50)} if act != "fire" else {-1: (40, 70), 1: (55, 45)}
+    elif gun == "m60":                    # at the hip
+        hold = {-1: (10, 70), 1: (30, 60)}
+    elif gun == "grenade_launcher":       # at the shoulder
+        hold = {-1: (30, 70), 1: (45, 50)}
+    elif gun == "rocket_launcher":        # tube on the shoulder
+        hold = {-1: (20, 110), 1: (60, 70)}
+    elif act == "work":
+        hold = {1: (80, 10), -1: (5, 15)}
+    else:
+        hold = {1: (0, 15), -1: (0, 15)}
+    if shield:   # the left arm holds the shield instead
+        hold = {**hold, 1: (35, 55)}
+    return hold
 
 
 def soldier(kind, light, lo, anim="idle", i=0):
@@ -284,7 +286,13 @@ def soldier(kind, light, lo, anim="idle", i=0):
     Returns (boxes, muzzle, fall, lift): render with those fall/lift values at INF_SCALE.
     """
     tc = team_set(light)
+    act ={"fire": "fire", "pfire": "fire", "kfire": "fire", "work": "work"}.get(anim)
     armor, weapon, speed = lo.get("armor", 1), lo.get("weapon", 1), lo.get("engine", 1)
+    # The gun in their hands. Medics and engineers carry kit in the weapon slot instead (the
+    # tier number picks the kit) and only draw their sidearm to fire.
+    gun = weapon_of(kind, lo)
+    if kind in ("medic", "engineer") and act != "fire":
+        gun = None
     # Heavy infantry always wear more plating than their tier name: Light = helmet + body
     # armour, Medium = full body armour, Heavy = full body armour + a ballistic shield.
     shield = kind == "heavy" and armor == 2
@@ -294,7 +302,6 @@ def soldier(kind, light, lo, anim="idle", i=0):
     add = lambda *a, **k: B.append(Box(*a, **k))
 
     firing_anims = ("fire", "pfire", "kfire", "work")
-    act = {"fire": "fire", "pfire": "fire", "kfire": "fire", "work": "work"}.get(anim)
     recoil = float(i) if anim in firing_anims else 0.0
     flash = anim in firing_anims and i == 1
     moving = anim in ("walk", "prone")
@@ -303,7 +310,7 @@ def soldier(kind, light, lo, anim="idle", i=0):
 
     # Leg and arm poses for this frame.
     legs = {1: (0, -4, 0, 0), -1: (0, -4, 0, 0)}
-    hold = _hold(kind, weapon, act, shield)
+    hold = _hold(gun, act, shield)
     arms = {s: (sp, ep, 0, 0) for s, (sp, ep) in hold.items()}
     free = {s for s, (sp, ep) in hold.items() if sp < 6}   # arms not holding anything up
     if anim == "walk":
@@ -338,7 +345,7 @@ def soldier(kind, light, lo, anim="idle", i=0):
     _arms(add, kind, tc, armor, weapon, arms)
     W = []
     wadd = lambda *a, **k: W.append(Box(*a, **k))
-    muzzle = _weapon(wadd, kind, tc, armor, weapon, act, recoil)
+    muzzle = _weapon(wadd, kind, gun, act, recoil)
     if shield:   # ballistic shield on the left arm, with a vision slit
         wadd((3.6, 3.4, 10.6), (0.8, 5.0, 9.6), tc["plate"])
         wadd((3.65, 3.4, 15.5), (0.9, 5.2, 0.5), GUN)
@@ -500,15 +507,11 @@ def _arms(add, kind, tc, armor, weapon, arms):
             _kit_mark(add, carry, 0.3, y - 1.3, ELBOW_Z - 5.6, "y", lower)
 
 
-def _weapon(add, kind, tc, armor, weapon, act, recoil):
+def _weapon(add, kind, gun, act, recoil):
     """Weapon / tool boxes; returns the muzzle (or tool tip) point."""
     r = -recoil
     aim = act == "fire"
-    if kind == "engineer" and act == "fire":
-        kind, weapon = "rifleman", 0
-    if kind == "heavy" and weapon == 0:   # the heavy team's light weapon is the M60
-        kind, weapon = "rifleman", 2
-    if kind == "heavy" and weapon == 1:   # M32-style revolving grenade launcher at the shoulder
+    if gun == "grenade_launcher":            # M32-style revolving grenade launcher at the shoulder
         z = 13.6 if aim else 12.8
         add((0.4 + r, -1.6, z - 0.4), (2.6, 1.2, 2.0), GUN)
         add((3.0 + r, -1.6, z), (3.0, 1.4, 1.6), GUN)
@@ -520,7 +523,7 @@ def _weapon(add, kind, tc, armor, weapon, act, recoil):
         add((7.2 + r, -1.6, z - 1.4), (0.8, 0.8, 1.6), GUN)               # foregrip
         add((5.8 + r, -1.6, z + 1.8), (1.0, 0.4, 1.0), GUN_L)             # ladder sight
         return (10.6 + r, -1.6, z + 0.2)
-    if kind == "rifleman" and weapon == 1:            # rifle at the ready
+    if gun == "rifle":                                 # rifle at the ready
         z = 13.4 if aim else 12.6
         add((0.6 + r, -1.6, z - 0.4), (3.0, 1.2, 2.2), BROWN)
         add((4.0 + r, -1.6, z), (5.0, 1.4, 2.0), GUN)
@@ -528,13 +531,13 @@ def _weapon(add, kind, tc, armor, weapon, act, recoil):
         add((4.6 + r, -1.6, z - 1.5), (1.2, 1.0, 2.2), GUN)
         add((9.0 + r, -1.6, z + 0.2), (5.0, 0.8, 0.8), GUN)
         return (11.5 + r, -1.6, z + 0.2)
-    if kind == "rifleman" and weapon == 0:             # pistol
+    if gun == "pistol":
         z = 14.6 if aim else 11.6
         x = 7.6 if aim else 4.4
         add((x + r, -3.7, z), (3.0, 1.0, 1.2), GUN)
         add((x - 1.0 + r, -3.7, z - 0.9), (1.0, 1.0, 1.4), GUN)
         return (x + 1.6 + r, -3.7, z)
-    if kind == "rifleman":                             # machine gun at the hip
+    if gun == "m60":                                   # machine gun at the hip
         z = 10.8
         add((4.6 + r, -2.0, z), (7.0, 2.2, 2.6), GUN)
         add((0.4 + r, -2.0, z - 0.4), (3.0, 1.6, 2.0), GUN)
@@ -546,7 +549,7 @@ def _weapon(add, kind, tc, armor, weapon, act, recoil):
         add((3.4 + r, -3.9, z - 2.6), (3.0, 2.4, 3.0), OLIVE)
         add((3.6 + r, -3.0, z - 0.8), (1.0, 0.6, 1.8), YELLOW)
         return (15.2 + r, -2.0, z + 0.2)
-    if kind == "heavy":                                # rocket launcher on the shoulder
+    if gun == "rocket_launcher":                       # rocket launcher on the shoulder
         length, th = 16, 3.0
         z = 16.6
         front = length - 6 + r
@@ -683,7 +686,8 @@ def tank(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False,
 
 def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     tc = team_set(light)
-    armor, weapon, speed = lo.get("armor", 1), lo.get("weapon", 1), lo.get("engine", 1)
+    armor, speed = lo.get("armor", 1), lo.get("engine", 1)
+    gun = weapon_of("tank", lo)
     B = []
     add = lambda *a, **k: B.append(Box(*a, **k))
     hull = blend(tc["Td"], OLIVE, 0.35)
@@ -727,8 +731,8 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
                 add((-15.0, s * 3.2, 9.6), (1.4, 1.6, 1.2), FLAME, glow=True)
 
     # Turret group (can turn independently of the hull).
-    if weapon == 2:
-        turret = 0.0   # the 155mm can't traverse: the whole tank turns to aim
+    if weapon_def(gun)["fixed"]:
+        turret = 0.0   # a fixed gun (the 155mm) can't traverse: the whole tank turns to aim
     tr = [("yaw", turret, TANK_PIVOT)]
     if wreck:
         tr.append(("roll", 8, (-1, 0, 12)))
@@ -762,9 +766,9 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     gz = 13.4
     pivot = (6.6, 0, gz)
     # Barrel elevation: the 155mm sits raised like an artillery piece; wrecks droop.
-    elev = -10 if wreck else (14 if weapon == 2 else 0)
+    elev = -10 if wreck else (14 if gun == "howitzer_155" else 0)
     bar = [("pitch", elev, pivot)] if elev else []
-    if weapon == 0:     # Bushmaster II 30mm: slim barrel, muzzle brake, ammo feed box, coax
+    if gun == "bushmaster":     # Bushmaster II 30mm: slim barrel, muzzle brake, ammo feed box, coax
         tadd((6.8, 0, gz), (1.6, 2.6, 2.2), GUN_L)
         length, th = 11, 0.9
         tadd((7.4 + length / 2 + r, 0, gz), (length, th, th), GUN, bar)
@@ -772,7 +776,7 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
         tadd((4.0, -3.7, gz), (2.4, 1.4, 1.8), GUN)
         tadd((8.0, 1.8, gz - 1.0), (4.0, 0.7, 0.7), GUN)
         muzzle_x = 7.4 + length + 1.0
-    elif weapon == 1:   # 120mm smoothbore: thick barrel, fume extractor, thermal sleeve bands
+    elif gun == "cannon_120":   # 120mm smoothbore: thick barrel, fume extractor, thermal sleeve bands
         tadd((6.8, 0, gz), (1.8, 4.0, 3.0), GUN_L)
         length, th = 13, 2.0
         tadd((7.4 + length / 2 + r, 0, gz), (length, th, th), GUN, bar)
@@ -798,7 +802,7 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     if flash:
         a = math.radians(elev)
         fx, fz = math.cos(a), math.sin(a)
-        size = {0: 2.0, 1: 3.2, 2: 4.0}[weapon]
+        size = {"bushmaster": 2.0, "cannon_120": 3.2}.get(gun, 4.0)
         tadd((muzzle[0] + fx * size / 2, 0, muzzle[2] + fz * size / 2), (size, size, size), FLASH_Y, glow=True)
         tadd((muzzle[0] + fx * 0.8, 0, muzzle[2] + fz * 0.8), (size * 0.6,) * 3, FLASH_W, glow=True)
     return B, _rotate(muzzle, "yaw", turret, TANK_PIVOT), gear
@@ -820,7 +824,8 @@ def jeep(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False,
 
 def _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     tc = team_set(light)
-    armor, weapon, speed = lo.get("armor", 1), lo.get("weapon", 1), lo.get("engine", 1)
+    armor, speed = lo.get("armor", 1), lo.get("engine", 1)
+    gun = weapon_of("jeep", lo)
     B = []
     add = lambda *a, **k: B.append(Box(*a, **k))
     body = tc["T"]
@@ -892,7 +897,7 @@ def _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
         wadd((-1.6, 0, 15.6), (0.5, 4.8, 3.2), tc["plate"])            # gun shield
     r = -recoil
     z = 14.8
-    if weapon == 0:     # M2 Browning: boxy receiver, perforated barrel jacket, spade grips
+    if gun == "m2":         # M2 Browning: boxy receiver, perforated barrel jacket, spade grips
         wadd((-3.6 + r, 0, z), (3.6, 1.8, 2.0), GUN)
         wadd((0.8 + r, 0, z + 0.2), (5.0, 1.1, 1.1), GUN_L)
         for k in range(4):
@@ -902,7 +907,7 @@ def _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
             wadd((-5.7 + r, s, z), (0.6, 0.5, 1.2), GUN)
         wadd((-3.6 + r, -1.7, z - 0.4), (1.6, 1.2, 1.4), OLIVE)
         muzzle = (4.8 + r, 0, z + 0.2)
-    elif weapon == 1:   # UAG-40 automatic grenade launcher: chunky receiver, short fat barrel, big ammo box
+    elif gun == "uag40":    # UAG-40 automatic grenade launcher: chunky receiver, short fat barrel, big ammo box
         wadd((-3.4 + r, 0, z), (4.4, 2.4, 2.4), GUN)
         wadd((-3.4 + r, 0, z + 1.3), (3.6, 1.6, 0.3), GUN_L)
         wadd((0.6 + r, 0, z + 0.2), (2.8, 1.5, 1.5), GUN)

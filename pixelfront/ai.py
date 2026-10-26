@@ -11,13 +11,23 @@ log = logging.getLogger(__name__)
 ARMY_MIX = {"barracks": [("rifleman", 5), ("heavy", 2), ("medic", 1)],
             "yard": [("jeep", 2), ("tank", 3)]}
 
+# Difficulty. The AI is deliberately a bit slow and a bit dim:
+THINK_INTERVAL = 2.5      # seconds between decisions (slow to react)
+FIRST_WAVE_AT = 300.0     # seconds before the first attack wave
+FIRST_WAVE, WAVE_GROWTH, MAX_WAVE = 4, 1, 10   # attack wave sizes
+TRAIN_CHANCE = 0.6        # chance an idle factory gets a new order on each think (it dawdles)
+MAX_ENGINEERS = 2
+DEFEND_RADIUS = 9         # tiles from the threat: only units this close notice their base is under attack
+DEFEND_CHANCE = 0.5       # and each of those only reacts half the time per think
+DUMB_TARGET = 0.4         # chance an attack wave heads for a random building, not the nearest
+
 
 class AI:
-    def __init__(self, game, team, first_wave_at=180.0):
+    def __init__(self, game, team, first_wave_at=FIRST_WAVE_AT):
         self.game = game
         self.team = team
         self.timer = 2.0
-        self.wave = 5
+        self.wave = FIRST_WAVE
         self.first_wave_at = first_wave_at
         self.rng = random.Random(game.rng.random())
         self.claims = {}  # unit id -> capture point it was sent to
@@ -26,7 +36,7 @@ class AI:
     def update(self, dt):
         self.timer -= dt
         if self.timer <= 0:
-            self.timer = 1.0
+            self.timer = THINK_INTERVAL
             self.think()
 
     def think(self):
@@ -54,9 +64,9 @@ class AI:
                 self.build("yard", engineers, base)
 
         for b in mine:
-            if not b.complete or b.queue:
+            if not b.complete or b.queue or self.rng.random() > TRAIN_CHANCE:
                 continue
-            if b.kind == "command" and len(engineers) < 3:
+            if b.kind == "command" and len(engineers) < MAX_ENGINEERS:
                 g.train(b, "engineer")
             elif b.kind in ARMY_MIX:
                 kind = self.rng.choices(*zip(*ARMY_MIX[b.kind]))[0]
@@ -81,7 +91,8 @@ class AI:
                 log.info("%s: AI base threat cleared", g.clock())
         if threat:
             for s in army:
-                if s.order in ("idle", "move") and s.armed:
+                if (s.order in ("idle", "move") and s.armed and self.rng.random() < DEFEND_CHANCE
+                        and math.hypot(s.x - threat.x, s.y - threat.y) < DEFEND_RADIUS * TILE):
                     s.order_attack(g, threat)
             return
 
@@ -96,8 +107,8 @@ class AI:
                     mix[u.kind] = mix.get(u.kind, 0) + 1
                 log.info("%s: AI attack wave of %d (%s) sent at %s %s; next wave size %d", g.clock(),
                          len(idle_army), ", ".join(f"{n} {k}" for k, n in sorted(mix.items())),
-                         target.name, (target.tx, target.ty), min(16, self.wave + 2))
-                self.wave = min(16, self.wave + 2)
+                         target.name, (target.tx, target.ty), min(MAX_WAVE, self.wave + WAVE_GROWTH))
+                self.wave = min(MAX_WAVE, self.wave + WAVE_GROWTH)
                 idle = [u for u in idle if u.kind == "engineer"]
         self.send_capturers(idle, base)
 
@@ -146,6 +157,8 @@ class AI:
         enemies = [b for b in self.game.buildings if b.team != self.team]
         if not enemies:
             return None
+        if self.rng.random() < DUMB_TARGET:   # not the sharpest general
+            return self.rng.choice(enemies)
         return min(enemies, key=lambda b: (b.x - base.x) ** 2 + (b.y - base.y) ** 2)
 
     def build(self, kind, engineers, base):

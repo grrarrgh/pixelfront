@@ -1,7 +1,8 @@
 """Draws the map view: terrain, entities, effects, fog and selection overlays."""
 import pygame
 
-from .config import TILE, SCREEN_W, VIEW_H, PLAYER, NEUTRAL, BUILDINGS, TEAM_COLORS, UNITS
+from .config import TILE, SCREEN_W, VIEW_H, PLAYER, NEUTRAL, BUILDINGS, TEAM_COLORS, TRACER_LIFE
+from .units import UNITS
 from .game import BOOM_TIME as SHOT_BOOM_TIME
 from .sprites import K, render_terrain, unit_anim, death_frame, DEATH_STEPS
 
@@ -18,6 +19,26 @@ def draw_shadow(surf, x, y, r, prone=False):
     sh = pygame.Surface((w, 5), pygame.SRCALPHA)
     pygame.draw.ellipse(sh, (60, 30, 10, 80), sh.get_rect())
     surf.blit(sh, (x - w // 2, y))
+
+
+TRACER_DASH, TRACER_GAP = 3, 3   # px: bullet trails read as "- - - -", not a solid beam
+
+
+def draw_tracer(surf, x1, y1, x2, y2, age=0.0, color=(255, 240, 170)):
+    """A dashed bullet trail from (x1, y1) to (x2, y2). The dashes slide towards the target as
+    the tracer ages, so a burst reads as rounds in flight."""
+    dx, dy = x2 - x1, y2 - y1
+    length = (dx * dx + dy * dy) ** 0.5
+    if length < 1:
+        return
+    ux, uy = dx / length, dy / length
+    period = TRACER_DASH + TRACER_GAP
+    d = (age / TRACER_LIFE) * period % period
+    while d < length:
+        e = min(length, d + TRACER_DASH)
+        pygame.draw.line(surf, color, (round(x1 + ux * d), round(y1 + uy * d)),
+                         (round(x1 + ux * (e - 1)), round(y1 + uy * (e - 1))))
+        d += period
 
 
 def draw_projectile(surf, p, cx, cy):
@@ -137,8 +158,7 @@ class Renderer:
                 self.draw_building(view, e, cx, cy)
 
         for tr in g.tracers:
-            pygame.draw.line(view, (255, 240, 170), (int(tr[0]) - cx, int(tr[1]) - cy),
-                             (int(tr[2]) - cx, int(tr[3]) - cy))
+            draw_tracer(view, tr[0] - cx, tr[1] - cy, tr[2] - cx, tr[3] - cy, tr[4])
         for p in g.projectiles:
             draw_projectile(view, p, cx, cy)
         for b in g.booms:
@@ -257,9 +277,11 @@ class Renderer:
         img = img.copy()
         img.set_alpha(150)
         view.blit(img, (int((tx + s / 2) * TILE) - cx - ox, int((ty + s / 2) * TILE) - cy - oy))
+        # Green only if the whole site is legal: clear ground AND a tile's clearance from every
+        # other building. Too close (or any bad tile) and the whole footprint shows red.
+        ok = g.can_place(kind, tx, ty, PLAYER)
+        tint = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
+        tint.fill((60, 220, 60, 70) if ok else (230, 40, 40, 110))
         for y in range(ty, ty + s):
             for x in range(tx, tx + s):
-                ok = g.world.in_bounds(x, y) and g.placeable_tile(x, y, PLAYER)
-                tint = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
-                tint.fill((60, 220, 60, 70) if ok else (230, 40, 40, 110))
                 view.blit(tint, (x * TILE - cx, y * TILE - cy))

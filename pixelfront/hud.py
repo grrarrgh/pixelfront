@@ -3,10 +3,11 @@ import math
 
 import pygame
 
-from .config import (SCREEN_W, SCREEN_H, VIEW_H, HUD_H, TOPBAR_H, TILE, PLAYER, ENEMY, NEUTRAL, UNITS,
+from .config import (SCREEN_W, SCREEN_H, VIEW_H, HUD_H, TOPBAR_H, TILE, PLAYER, ENEMY, NEUTRAL,
                      MAX_CAPTURERS, POINT_INCOME)
+from .units import UNITS
 from .font import draw_text, text_width
-from .modules import loadout_summary, format_stat
+from .modules import loadout_summary, format_stat, armor_rank_info
 from .render import hp_bar, team_color
 from .sprites import K, GOLD, render_minimap, fit
 
@@ -251,7 +252,8 @@ class HUD:
             parts.append(f"Armor {e.armor}")
             parts.append(f"Spd {e.speed:.0f}")
             draw_text(surf, "  ".join(parts), x, y, GREY)
-            draw_text(surf, loadout_summary(e.kind, e.loadout), x, y + 9, (200, 200, 220))
+            draw_text(surf, f"{loadout_summary(e.kind, e.loadout)}  ({armor_rank_info(e.kind, e.loadout)[0]})",
+                      x, y + 9, (200, 200, 220))
             if e.team == PLAYER:
                 draw_text(surf, e.status, x, y + 18, (230, 230, 230))
             return

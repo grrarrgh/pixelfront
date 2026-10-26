@@ -4,11 +4,17 @@ import math
 import random
 from collections import deque
 
-from .config import (TILE, PLAYER, ENEMY, NEUTRAL, UNITS, BUILDINGS, START_CREDITS, SUPPLY_CAP,
+from . import weapons
+from .ai import AI
+from .config import (TILE, PLAYER, ENEMY, NEUTRAL, BUILDINGS, START_CREDITS, SUPPLY_CAP,
                      BASE_INCOME, POINT_INCOME, CAPTURE_TIME, CAPTURE_RADIUS, MAX_CAPTURERS,
-                     SUPPRESS_PER_SHOT, SUPPRESS_EXPLOSIVE, SUPPRESS_RADIUS, PRONE_TARGET_HIT, PRONE_ACCURACY,
-                     BUILD_GRID, GRID_OFFSET, SANDBOX_BUILD_SPEED)
-from .entities import Unit, Building, CapturePoint, Projectile, dist_point_rect
+                     BUILD_GRID, GRID_OFFSET, BUILD_SPEED, SANDBOX_BUILD_SPEED, TRACER_LIFE)
+from .entities import Building, CapturePoint, dist_point_rect
+from .fog import Fog
+from .modules import default_loadout, loadout_cost, loadout_time, loadout_summary
+from .units import UNITS
+from .units.unit import Unit
+from .world import generate
 
 log = logging.getLogger(__name__)
 TEAM_NAMES = {PLAYER: "player", ENEMY: "enemy", NEUTRAL: "neutral"}
@@ -17,10 +23,6 @@ BOOM_TIME = 0.35  # seconds an explosion flash lasts
 YIELD_SPEED = 45  # px/s a soldier sidesteps out of a vehicle's way
 TEST_TARGET_SPACING = 2          # tiles between test-range targets
 TEST_TARGET_OFFSET = (17, 13)    # tiles from the player's Command Center to the targets (~21 away)
-from .modules import default_loadout, loadout_cost, loadout_time, loadout_summary
-from .world import generate
-from .fog import Fog
-from .ai import AI
 
 
 class Team:
@@ -61,7 +63,7 @@ class Game:
         self.teams = {PLAYER: Team(PLAYER, START_CREDITS), ENEMY: Team(ENEMY, START_CREDITS)}
         self.time = 0.0
         self.winner = None
-        self.build_speed = SANDBOX_BUILD_SPEED if sandbox else 1.0   # test range builds faster
+        self.build_speed = BUILD_SPEED * (SANDBOX_BUILD_SPEED if sandbox else 1.0)   # test range builds faster
         self.last_alert = -99.0
         self.alert_pos = None
         self.fog = Fog(self.world)
@@ -209,7 +211,7 @@ class Game:
         self.particles = [p for p in self.particles if p[4] > 0]
         for tr in self.tracers:
             tr[4] += dt
-        self.tracers = [tr for tr in self.tracers if tr[4] < 0.07]
+        self.tracers = [tr for tr in self.tracers if tr[4] < TRACER_LIFE]
         self.booms = [b for b in self.booms if self.time - b[2] < BOOM_TIME]
         self.decals = [d for d in self.decals if self.time - d["t"] < d["life"]]
         self.messages = [m for m in self.messages if self.time - m[1] < 6]
@@ -405,8 +407,8 @@ class Game:
         return out
 
     def can_place(self, kind, tx, ty, team=None):
-        """Buildings sit on the build grid, on clear ground, with a tile of clearance from any
-        other structure, so there are always lanes for units to move through."""
+        """Buildings sit on the build grid (every tile, by default), on clear ground, with a tile
+        of clearance from any other structure, so there are always lanes for units to move through."""
         s = BUILDINGS[kind]["size"]
         if (tx - GRID_OFFSET) % BUILD_GRID or (ty - GRID_OFFSET) % BUILD_GRID:
             return False
@@ -528,34 +530,8 @@ class Game:
     # ---- combat -----------------------------------------------------------
 
     def attack(self, attacker, target, mult=1.0, origin=None):
-        """Fire one shot. Accuracy decides whether it hits; misses land somewhere nearby.
-        mult scales damage (garrison bonus); origin overrides where the shot starts."""
-        amount = attacker.damage * mult * (attacker.vs_vehicle if target.is_vehicle else 1.0)
-        accuracy = attacker.accuracy * (PRONE_ACCURACY if attacker.suppressed else 1.0)
-        if target.is_unit and target.suppressed:
-            accuracy *= PRONE_TARGET_HIT   # a soldier hugging the dirt is a small target
-        hit = self.rng.random() < accuracy
-        miss = None
-        if not hit:
-            spread = 6 + (1 - accuracy) * 30
-            ang = self.rng.uniform(0, math.tau)
-            miss = (math.cos(ang) * spread, math.sin(ang) * spread * 0.6)
-        start = origin or attacker.muzzle_pos()
-        if attacker.weapon == "bullet":
-            if hit:
-                end = (target.x + self.rng.uniform(-2, 2), target.y - 3 + self.rng.uniform(-2, 2))
-            else:
-                end = (target.x + miss[0], target.y + miss[1])
-                self.particles.append([end[0], end[1], 0, -15, 0.25, (200, 176, 130), 1.0])
-            self.tracers.append([start[0], start[1], end[0], end[1], 0.0])
-            # Rounds snapping past keep heads down whether or not they hit.
-            if target.is_unit:
-                target.suppress(SUPPRESS_PER_SHOT + attacker.damage)
-            if hit:
-                self.damage(target, amount, attacker)
-        else:
-            self.projectiles.append(Projectile(attacker, target, attacker.damage * mult, attacker.weapon,
-                                               start, miss))
+        """Fire one round of the attacker's weapon (see weapons.fire)."""
+        weapons.fire(self, attacker, target, mult, origin)
 
     def enter(self, unit, bunker):
         """A soldier climbs into a bunker: off the map until unloaded or the bunker falls."""
@@ -589,23 +565,6 @@ class Game:
             self.add(u)
             self.refresh()
         bunker.occupants = []
-
-    def blast(self, x, y, radius=SUPPRESS_RADIUS):
-        """Explosions pin down any infantry close by."""
-        for u in self.units:
-            if u.is_infantry and math.hypot(u.x - x, u.y - y) <= radius:
-                u.suppress(SUPPRESS_EXPLOSIVE)
-
-    def splash(self, x, y, radius, damage, vs_vehicle, team, source):
-        """Area damage: full at the centre, half at the edge, enemies only."""
-        for u in list(self.units):
-            d = math.hypot(u.x - x, u.y - y) - u.radius
-            if u.team != team and u.alive and d <= radius:
-                f = 1 - 0.5 * max(0.0, d) / radius
-                self.damage(u, damage * f * (vs_vehicle if u.is_vehicle else 1.0), source)
-        for b in list(self.buildings):
-            if b.team != team and b.alive and dist_point_rect(x, y, b.rect()) <= radius:
-                self.damage(b, damage * 0.75, source)
 
     def boom(self, x, y, r):
         """An explosion flash for the renderer to draw."""

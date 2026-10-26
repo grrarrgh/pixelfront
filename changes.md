@@ -2,6 +2,50 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.9.0 "Hit the Dirt" (2026-10-26)
+
+A large refactor, plus weapon types, armour ranks and smarter suppression. Also a gentler AI and freer building placement.
+
+### Changed: code layout
+
+- Each unit type now has its own file in `pixelfront/units/` (stats, weapon tiers, special tiers). `units/unit.py` holds the shared behaviour.
+- Every weapon lives in `pixelfront/weapons.py`. That file also holds the three weapon types, armour ranks, projectiles, and how firing, splash and suppression work. See the README for how to add a weapon or a unit.
+- Models choose their guns by weapon id, so a new weapon only needs a model, not new tier logic.
+
+### Added
+
+- **Weapon types**:
+  - Bullets: moderate damage against jeeps, weak against tanks and buildings.
+  - Explosives: heavy damage against tanks and buildings.
+  - Anti-armour: big hits, with a bonus against vehicles.
+- **Explosives cause suppression.** Every blast pins down nearby infantry on both sides.
+- **Pinned soldiers retreat.** Suppressed infantry crawl a few tiles directly away from whatever is pinning them, then carry on with their orders. A direct move order overrides this.
+- **Pinned soldiers hold position.** They no longer crawl towards enemies out of reach. They shoot anyone in range or keep their heads down.
+- **Armour ranks**:
+  - Infantry: unarmoured, helmet + vest, full body, and full body + shield. Heavier armour stops more bullets and explosive damage.
+  - The ballistic shield stops about half of all bullets and explosive damage.
+  - Heavy infantry always wear one rank more than their tier name.
+  - Armoured infantry lying prone take much less from explosions.
+  - Vehicles have light, medium or heavy plating.
+  - The rank is shown on the selected unit, and the design screen lists each armour tier's damage cuts.
+- Bullet trails are now dashed (`- - - -`) instead of solid lines.
+
+### Balance
+
+- The Bushmaster fires fast 10-round bursts of light rounds, then reloads. One wears a tank down slowly, and several take it apart quickly. Measured time to kill a tank: 1 Bushmaster ~34 s, 2 ~16 s, 3 ~10 s.
+- Tanks now have the slowest reloads of any unit: Bushmaster 3.0 s, 120mm 3.5 s, 155mm 5.0 s. To make up for this, the 120mm now does 50 damage and the 155mm 55.
+- Building and training take twice as long. The test range is still 10x faster than normal.
+- The AI is easier and a bit dimmer:
+  - It thinks every 2.5 s instead of every second.
+  - Its first attack comes at 5:00, with smaller waves that grow more slowly.
+  - Its factories dawdle, and it keeps 2 engineers instead of 3.
+  - Only nearby units notice an attack on its base, and only some of them react.
+  - Some attack waves wander off to a random target.
+
+### Fixed / improved
+
+- Buildings snap to single tiles instead of a coarse 4-tile grid. The placement preview turns red when the site is too close to another building.
+
 ## 0.8.0 "Paper Trail" (2026-10-26)
 
 Every run now writes a log file.

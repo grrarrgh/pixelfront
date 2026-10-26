@@ -8,7 +8,8 @@ import random
 import pygame
 
 from . import model3d as m3
-from .config import TILE, TEAM_COLORS, PLAYER, ENEMY, UNITS, KNEEL_TIME, STEER_MAX
+from .config import TILE, TEAM_COLORS, PLAYER, ENEMY, KNEEL_TIME, STEER_MAX
+from .units import UNITS
 from .modules import default_loadout
 from .world import SAND, DUNE, ROCK, CLIFF
 

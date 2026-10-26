@@ -1,19 +1,22 @@
 """Unit loadouts: the core customisation mechanic.
 
-Every unit is trained with one tier chosen per module slot. The middle tier is the unit's
-baseline; tiers either side trade one strength for another. A tier changes stats with
-multipliers (`mul`) and flat additions (`add`), and changes price and build time by a
-fraction of the unit's base values.
+Every unit is trained with one tier chosen per module slot (Armor, Weapon, Speed). The middle
+tier is the unit's baseline; tiers either side trade one strength for another. A tier changes
+stats with multipliers (`mul`) and flat additions (`add`), and changes price and build time by
+a fraction of the unit's base values.
 
-Extending:
-- New slot: add an entry to SLOTS (and to STAT_NAMES if it touches a new stat), plus a
-  look in sprites.DECOR if it should be visible.
-- Unit-specific behaviour for a slot: add its tier list to UNIT_TIERS (the rifleman's
-  weapon tiers are a pistol, a rifle and a machine gun).
-- Units get every slot unless their UNITS entry lists "slots"; "slot_labels" renames a
-  slot for one unit (the medic's weapon slot is its "Medkit").
+Where things live:
+- Generic Armor and Speed tiers: SLOTS below.
+- Weapon tiers: each unit's `weapons` list (units/<kind>.py) names a weapon per tier; the
+  weapon's numbers come from weapons.py.
+- Unit-specific tiers for any slot (the medic's medkit, heavy infantry armour): the unit's
+  `tiers` in units/<kind>.py.
+
+Extending: a new slot is an entry in SLOTS (plus STAT_NAMES if it touches a new stat) and a
+look in model3d if it should be visible.
 """
-from .config import UNITS
+from . import weapons as W
+from .units import UNITS
 
 SLOTS = {
     "armor": dict(label="Armor", default=1, tiers=[
@@ -23,15 +26,8 @@ SLOTS = {
         dict(name="Heavy", desc="Thick plating. Slow and expensive.",
              mul={"hp": 1.6, "speed": 0.8}, add={"armor": 1}, cost=0.5, time=0.3),
     ]),
-    "weapon": dict(label="Weapon", default=1, tiers=[
-        dict(name="Light", desc="Lighter, faster-firing, weaker.",
-             mul={"damage": 0.7, "heal": 0.7, "work": 0.7, "cooldown": 0.8, "speed": 1.05},
-             cost=-0.15, time=-0.1),
-        dict(name="Medium", desc="Standard issue."),
-        dict(name="Heavy", desc="Hits hard and reaches further. Slow to reload and carry.",
-             mul={"damage": 1.7, "heal": 1.7, "work": 1.7, "range": 1.15, "cooldown": 1.3, "speed": 0.85},
-             cost=0.5, time=0.3),
-    ]),
+    # Weapon tiers come from each unit's `weapons` (or `tiers["weapon"]`); see tiers().
+    "weapon": dict(label="Weapon", default=1, tiers=None),
     "engine": dict(label="Speed", default=1, tiers=[
         dict(name="Slow", desc="Extra kit: tougher but sluggish.",
              mul={"speed": 0.75, "hp": 1.2}, cost=-0.15, time=-0.1),
@@ -40,54 +36,7 @@ SLOTS = {
              mul={"speed": 1.4, "hp": 0.8}, cost=0.35, time=0.2),
     ]),
 }
-
-# (unit kind, slot) -> tier list replacing the slot's generic tiers for that unit.
-UNIT_TIERS = {
-    ("rifleman", "weapon"): [
-        dict(name="Light", desc="Pistol: light damage, very accurate, short range.",
-             mul={"damage": 0.6, "range": 0.6, "cooldown": 0.8, "speed": 1.08},
-             add={"accuracy": 0.12}, cost=-0.2, time=-0.1),
-        dict(name="Medium", desc="Rifle: all-purpose."),
-        dict(name="Heavy", desc="Machine gun: long bursts of fire, inaccurate, heavy to carry.",
-             mul={"damage": 0.8, "cooldown": 1.15, "range": 1.1, "speed": 0.72},
-             set={"burst": 4}, add={"accuracy": -0.2}, cost=0.5, time=0.3),
-    ],
-    # Weapon tiers that swap the weapon itself use `set` (applied before any mul/add).
-    ("heavy", "weapon"): [
-        dict(name="Light", desc="M60 machine gun: bursts of fire that pin infantry down; weak vs armour.",
-             set={"weapon": "bullet", "damage": 5, "cooldown": 1.0, "burst": 4, "range": 70, "accuracy": 0.6,
-                  "vs_vehicle": 1.0}, cost=-0.1, time=-0.1),
-        dict(name="Medium", desc="Grenade launcher: lobbed grenades that burst over a small area."),
-        dict(name="Heavy", desc="Shoulder rocket launcher: slow to reload, devastating vs vehicles.",
-             set={"weapon": "rocket", "damage": 24, "cooldown": 2.4, "range": 84, "accuracy": 0.9,
-                  "vs_vehicle": 1.75}, mul={"speed": 0.9}, cost=0.4, time=0.3),
-    ],
-    ("heavy", "armor"): [
-        dict(name="Light", desc="Helmet and body armour.", mul={"hp": 0.75, "speed": 1.1},
-             cost=-0.15, time=-0.1),
-        dict(name="Medium", desc="Helmet and full body armour."),
-        dict(name="Heavy", desc="Full body armour plus a ballistic shield.",
-             mul={"hp": 1.6, "speed": 0.8}, add={"armor": 2}, cost=0.5, time=0.3),
-    ],
-    ("jeep", "weapon"): [
-        dict(name="Light", desc="M2 Browning: heavy machine gun, fast and accurate.",
-             set={"weapon": "bullet", "damage": 7, "cooldown": 0.3, "range": 76, "accuracy": 0.8},
-             cost=-0.1, time=-0.1),
-        dict(name="Medium", desc="UAG-40 automatic grenade launcher: bursts of splashing grenades."),
-        dict(name="Heavy", desc="Twin wire-guided rockets: long range, deadly vs vehicles, slow to reload.",
-             set={"weapon": "atgm", "damage": 32, "cooldown": 2.8, "range": 110, "accuracy": 0.95,
-                  "vs_vehicle": 1.8}, cost=0.5, time=0.3),
-    ],
-    ("tank", "weapon"): [
-        dict(name="Light", desc="Bushmaster II 30mm autocannon: rapid bursts, good vs infantry and light vehicles.",
-             set={"weapon": "autocannon", "damage": 9, "cooldown": 0.35, "range": 84, "accuracy": 0.85,
-                  "vs_vehicle": 1.2}, cost=-0.15, time=-0.1),
-        dict(name="Medium", desc="120mm cannon: the all-round tank gun."),
-        dict(name="Heavy", desc="155mm artillery: huge range and blast, slow and inaccurate.",
-             set={"weapon": "artillery", "damage": 45, "cooldown": 4.0, "range": 160, "accuracy": 0.65,
-                  "vs_vehicle": 1.0}, mul={"speed": 0.85}, cost=0.6, time=0.4),
-    ],
-}
+TIER_NAMES = ("Light", "Medium", "Heavy")
 
 # Stat key -> display name. Stats a unit doesn't have (base value 0) are hidden for it.
 STAT_NAMES = {
@@ -95,7 +44,7 @@ STAT_NAMES = {
     "range": "Range", "cooldown": "Reload", "burst": "Burst", "accuracy": "Accuracy", "speed": "Speed",
     "sight": "Sight", "vs_vehicle": "Vs vehicles",
 }
-STAT_DEFAULTS = {"heal": 0, "work": 0, "vs_vehicle": 1.0, "accuracy": 0.85, "burst": 1}
+UNIT_STAT_DEFAULTS = {"heal": 0, "work": 0, "cooldown": 1.0}
 LOWER_IS_BETTER = {"cooldown"}
 
 
@@ -107,8 +56,24 @@ def slot_label(kind, slot):
     return UNITS[kind].get("slot_labels", {}).get(slot, SLOTS[slot]["label"])
 
 
+_weapon_tiers = {}
+
+
 def tiers(kind, slot):
-    return UNIT_TIERS.get((kind, slot)) or SLOTS[slot]["tiers"]
+    d = UNITS[kind]
+    if slot in d.get("tiers", {}):
+        return d["tiers"][slot]
+    if slot == "weapon" and "weapons" in d:
+        got = _weapon_tiers.get(kind)
+        if got is None:   # build Light/Medium/Heavy tiers from the unit's weapon list
+            got = _weapon_tiers[kind] = []
+            for name, entry in zip(TIER_NAMES, d["weapons"]):
+                w = W.weapon(entry["weapon"])
+                got.append(dict(entry, name=name, desc=f"{w['name']}: {w['desc']}"))
+        return got
+    if SLOTS[slot]["tiers"] is None:   # a fixed weapon (or none): nothing to choose
+        return [dict(name=n) for n in TIER_NAMES]
+    return SLOTS[slot]["tiers"]
 
 
 def tier(kind, slot, level):
@@ -120,29 +85,52 @@ def default_loadout(kind):
 
 
 def base_stats(kind):
-    base = UNITS[kind]
-    st = {k: base.get(k, STAT_DEFAULTS.get(k, 0)) for k in STAT_NAMES}
-    if not base.get("weapon"):
-        st["accuracy"] = 0
-    st["weapon"] = base.get("weapon")
+    """The unit's own stats plus those of its default weapon, plus "weapon" (its id)."""
+    d = UNITS[kind]
+    st = {k: d.get(k, UNIT_STAT_DEFAULTS.get(k, 0)) for k in STAT_NAMES}
+    st.update(W.stats(d["weapon"]))
+    if d["weapon"] is None:
+        st["cooldown"] = d.get("cooldown", 1.0)   # unarmed units: their work cadence
+    st["weapon"] = d["weapon"]
     return st
 
 
 def compute_stats(kind, loadout):
-    """Stats for a unit with this loadout, including "weapon" (the weapon type it fires)."""
+    """Stats for a unit with this loadout, including "weapon": the id of the weapon it carries."""
     st = base_stats(kind)
     for slot, level in loadout.items():
-        st.update(tier(kind, slot, level).get("set", {}))
+        wid = tier(kind, slot, level).get("weapon")
+        if wid:
+            st.update(W.stats(wid))
+            st["weapon"] = wid
     for slot, level in loadout.items():
         t = tier(kind, slot, level)
         for k, v in t.get("mul", {}).items():
             st[k] *= v
         for k, v in t.get("add", {}).items():
-            if k != "accuracy" or st[k]:
-                st[k] += v
+            st[k] += v
     if st["accuracy"]:
         st["accuracy"] = min(1.0, max(0.05, st["accuracy"]))
+    st["armor_rank"] = armor_rank(kind, loadout)
     return st
+
+
+def armor_rank(kind, loadout):
+    """Armour rank (index into weapons.ARMOR_RANKS): the Armor tier plus the unit's extra ranks."""
+    return loadout.get("armor", SLOTS["armor"]["default"]) + UNITS[kind].get("armor_rank", 0)
+
+
+def armor_rank_info(kind, loadout):
+    """(rank name, 'Bullets -15%  Explosives -15%'-style summary) for the HUD and design screen."""
+    d = W.armor_rank(UNITS[kind]["cls"], armor_rank(kind, loadout))
+    cuts = [f"{label} -{(1 - d[t]) * 100:.0f}%" for t, label in
+            (("bullet", "Bullets"), ("explosive", "Explosives"), ("anti_armor", "AT"))]
+    return d["name"], "  ".join(c for c in cuts if not c.endswith("-0%"))
+
+
+def weapon_of(kind, loadout):
+    """The weapon id a unit with this loadout carries (None if unarmed)."""
+    return compute_stats(kind, loadout)["weapon"]
 
 
 def loadout_cost(kind, loadout):
@@ -192,13 +180,22 @@ def format_stat(key, value):
 
 
 def tier_effects(kind, slot, level):
-    """Human-readable effects of a tier on this unit, e.g. ['+60% HP', '-20% Speed']."""
+    """Human-readable effects of a tier on this unit, e.g. ['+60% HP', 'Damage 14']."""
     t = tier(kind, slot, level)
     base = base_stats(kind)
     out = []
-    for k, v in t.get("set", {}).items():
-        if k in STAT_NAMES and v != base[k]:
-            out.append(f"{STAT_NAMES[k]} {format_stat(k, v)}")
+    if slot == "armor":
+        name, cuts = armor_rank_info(kind, {"armor": level})
+        out.append(name)
+        if cuts:
+            out.append(cuts)
+    wid = t.get("weapon")
+    if wid and wid != base["weapon"]:
+        w = W.weapon(wid)
+        out.append(f"{w['type'].replace('_', '-')}")
+        for k, v in W.stats(wid).items():
+            if v != base[k] and not (k == "burst" and v == 1):
+                out.append(f"{STAT_NAMES[k]} {format_stat(k, v)}")
     for k, v in t.get("mul", {}).items():
         if base[k]:
             out.append(f"{(v - 1) * 100:+.0f}% {STAT_NAMES[k]}")

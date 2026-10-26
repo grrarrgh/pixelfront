@@ -3,7 +3,8 @@ import logging
 
 import pygame
 
-from .config import SCREEN_W, VIEW_H, PLAYER, UNITS, TEAM_COLORS
+from .config import SCREEN_W, VIEW_H, PLAYER, TEAM_COLORS
+from .units import UNITS
 from .font import draw_text, text_width
 from .modules import (slots_for, slot_label, tiers, compute_stats, base_stats, loadout_cost,
                       loadout_time, tier, tier_effects, format_stat, STAT_NAMES, LOWER_IS_BETTER,

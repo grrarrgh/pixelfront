@@ -42,8 +42,12 @@ PRONE_SPEED = 0.6          # speed multiplier while crawling (40% slower)
 PRONE_TARGET_HIT = 0.5     # chance-to-hit multiplier for shots aimed at a prone soldier
 PRONE_ACCURACY = 0.75      # accuracy multiplier while pinned
 PRONE_RANGE = 0.6          # weapon range multiplier while firing prone
+RETREAT_DISTANCE = 3       # tiles a pinned soldier crawls away from whatever is suppressing them
+RETREAT_COOLDOWN = 4.0     # seconds before a pinned soldier will crawl back again
+RETREAT_TIMEOUT = 6.0      # give up on a retreat that's taking too long
 
 BURST_GAP = 0.09           # seconds between rounds of a burst (machine guns)
+TRACER_LIFE = 0.07         # seconds a dashed bullet trail stays on screen
 
 # Infantry manning a bunker: reload time x0.75, damage and range x1.1.
 GARRISON_RELOAD = 0.75
@@ -53,40 +57,17 @@ GARRISON_HEAL = 1.0        # hp per second the bunker slowly restores to each so
                            # (always well below a medic's rate)
 
 TURRET_SPEED = 160         # degrees per second a turret (or mounted gun) traverses
-HULL_TURN = {"jeep": 300, "tank": 140}   # degrees per second a vehicle hull turns
 STEER_MAX = 28             # how far front wheels turn into a bend, degrees
 
-# Buildings snap to an invisible grid and keep a tile of clearance, leaving lanes to move through.
-BUILD_GRID = 4
-GRID_OFFSET = 2            # grid lines fall on tiles where (tile - GRID_OFFSET) % BUILD_GRID == 0
-SANDBOX_BUILD_SPEED = 10   # the test range builds and trains this many times faster
+# Buildings snap to the tile grid and must keep a tile of clearance from other buildings, leaving
+# lanes to move through. (A coarser grid, e.g. 4 with offset 2, lines bases up in blocks.)
+BUILD_GRID = 1
+GRID_OFFSET = 0            # grid lines fall on tiles where (tile - GRID_OFFSET) % BUILD_GRID == 0
+BUILD_SPEED = 0.5          # global construction and training speed (0.5 = everything takes twice as long)
+SANDBOX_BUILD_SPEED = 10   # the test range builds and trains this many times faster than that
 KNEEL_TIME = 0.5           # seconds heavy infantry take to kneel before they can fire
 
-# Base stats, before loadout modules (see modules.py). "cls" is infantry or vehicle.
-# weapon: "bullet" hits instantly; "rocket", "atgm", "shell", "autocannon", "grenade" and
-# "artillery" fire projectiles (see entities.PROJECTILES); None = unarmed.
-UNITS = {
-    "engineer": dict(name="Engineer", cls="infantry", hp=40, armor=0, damage=3, range=40, cooldown=1.0,
-                     weapon="bullet", speed=38, sight=5, work=1.0, cost=75, time=9, supply=1,
-                     radius=4, height=13, hotkey="e", desc="Builds, repairs and captures.",
-                     slot_labels={"weapon": "Tools"}),
-    "rifleman": dict(name="Rifleman", cls="infantry", hp=55, armor=0, damage=6, range=64, cooldown=0.9,
-                     weapon="bullet", speed=40, sight=6, cost=60, time=8, supply=1,
-                     radius=4, height=13, hotkey="r", desc="All-round infantry."),
-    "medic": dict(name="Medic", cls="infantry", hp=45, armor=0, damage=0, heal=6, range=0, cooldown=1.0,
-                  weapon=None, speed=42, sight=6, cost=70, time=9, supply=1,
-                  radius=4, height=13, hotkey="m", desc="Heals nearby infantry.",
-                  slot_labels={"weapon": "Medkit"}),
-    "heavy": dict(name="Heavy Infantry", cls="infantry", hp=80, armor=1, damage=14, range=80, cooldown=1.6,
-                  weapon="grenade", accuracy=0.8, speed=32, sight=6, cost=110, time=12, supply=1,
-                  radius=4, height=13, hotkey="h", desc="Armoured heavy weapons team."),
-    "jeep": dict(name="Jeep", cls="vehicle", hp=110, armor=1, damage=10, range=84, cooldown=0.6,
-                 weapon="grenade", accuracy=0.75, speed=72, sight=8, cost=120, time=12, supply=2,
-                 radius=9, height=19, hotkey="j", desc="Fast scout with a mounted weapon."),
-    "tank": dict(name="Tank", cls="vehicle", hp=300, armor=4, damage=30, range=88, cooldown=2.0,
-                 weapon="shell", speed=30, sight=7, cost=250, time=20, supply=3,
-                 radius=11, height=21, hotkey="t", desc="Heavy armor and a big gun."),
-}
+# Units live in pixelfront/units/ (one file per type) and weapons in pixelfront/weapons.py.
 
 BUILDINGS = {
     "command": dict(name="Command Center", size=3, hp=1500, armor=4, cost=500, time=60,
