@@ -5,12 +5,13 @@ import time
 
 import pygame
 
-from .config import SCREEN_W, SCREEN_H, VIEW_H, FPS, PLAYER, TILE, MAP_W, MAP_H
+from .config import SCREEN_W, SCREEN_H, VIEW_H, FPS, PLAYER, TILE, MAP_W, MAP_H, RES, DISPLAY_W, DISPLAY_H
 from .controller import Controller, TARGET_MODES
 from .design import DesignScreen
 from .font import draw_text
 from .game import Game
 from .hud import HUD
+from .layer import Layer, to_ui
 from .motiontest import MotionTest
 from .render import Renderer
 from .sprites import Sprites, render_terrain, fit
@@ -29,7 +30,7 @@ CONTROLS = [
     ("Shift + 1-9", "Recall group (twice: jump)"),
     ("WASD / arrows / edge", "Scroll"),
     ("Middle drag / minimap", "Move camera"),
-    ("Command Center picture", "Jump to your base"),
+    ("CC picture (sidebar)", "Jump to your base"),
     ("Space", "Jump to base"),
     ("F1 / F11", "Help / fullscreen"),
     ("Esc", "Cancel / menu"),
@@ -44,12 +45,16 @@ class App:
         pygame.init()
         pygame.display.set_caption("Pixelfront")
         try:
-            self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.SCALED, vsync=1)
+            self.screen = pygame.display.set_mode((DISPLAY_W, DISPLAY_H), pygame.SCALED, vsync=1)
         except pygame.error:
             log.warning("vsync unavailable, running without it")
-            self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.SCALED)
-        log.info("Display: logical %dx%d, window %s, driver %s", SCREEN_W, SCREEN_H,
-                 pygame.display.get_window_size(), pygame.display.get_driver())
+            self.screen = pygame.display.set_mode((DISPLAY_W, DISPLAY_H), pygame.SCALED)
+        log.info("Display: logical %dx%d (UI %dx%d at %dx), window %s, driver %s", DISPLAY_W, DISPLAY_H,
+                 SCREEN_W, SCREEN_H, RES, pygame.display.get_window_size(), pygame.display.get_driver())
+        self.base = Layer()   # HUD and its pictures
+        self.top = Layer()    # tooltips, menus and popups above them
+        self.title_dim = pygame.Surface((DISPLAY_W, DISPLAY_H), pygame.SRCALPHA)
+        self.title_dim.fill((0, 0, 0, 120))
         t0 = time.perf_counter()
         self.sprites = Sprites()
         log.info("Sprites ready in %.0f ms", (time.perf_counter() - t0) * 1000)
@@ -99,7 +104,7 @@ class App:
                 log.warning("Slow frame: %.0f ms on the %s screen", raw * 1000, self.state)
             dt = min(raw, 0.05)
             for ev in pygame.event.get():
-                self.handle(ev)
+                self.handle(to_ui(ev))   # input is handled on the 640x360 UI grid
             self.update(dt)
             self.draw()
             pygame.display.flip()
@@ -176,29 +181,37 @@ class App:
     # ---- drawing ----------------------------------------------------------
 
     def draw(self):
+        """The world at full resolution, then the HUD layer, then the overlay layer, then the cursor."""
         s = self.screen
+        base, top = self.base, self.top
+        base.begin()
+        top.begin()
         if self.state == "title":
-            self.draw_title(s)
+            self.draw_title(s, base)
         elif self.state == "motion":
-            self.motion.draw(s)
+            self.motion.draw(s, base)
         else:
             self.renderer.draw(s, self.ctrl)
-            self.hud.draw(s, self.ctrl)
+            self.hud.draw(base, self.ctrl)
+            self.hud.draw_overlays(top, self.ctrl)
             if self.ctrl.show_help:
-                self.draw_help(s)
+                self.draw_help(top.touch())
             if self.state == "design":
-                self.design.draw(s)
+                self.design.draw(top)
             elif self.state == "paused":
-                self.overlay(s, "Paused", ["Esc - Resume", "R - Restart", "Q - Quit to title"])
+                self.overlay(top.touch(), "Paused", ["Esc - Resume", "R - Restart", "Q - Quit to title"])
             elif self.state == "over":
                 won = self.game.winner == PLAYER
-                self.overlay(s, "Victory!" if won else "Defeat",
+                self.overlay(top.touch(), "Victory!" if won else "Defeat",
                              ["All enemy buildings destroyed." if won else "Your base has fallen.",
                               "Enter - Play again", "Esc - Title screen"],
                              (250, 220, 110) if won else (240, 90, 80))
+        base.composite(s)
+        top.composite(s)
         self.draw_cursor(s)
 
     def shade(self, s, alpha=150):
+        """Dim a whole UI-layer surface."""
         dim = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
         dim.fill((0, 0, 0, alpha))
         s.blit(dim, (0, 0))
@@ -209,27 +222,26 @@ class App:
         for i, line in enumerate(lines):
             draw_text(s, line, SCREEN_W // 2, 160 + i * 14, (230, 230, 230), scale=2, align="center")
 
-    def draw_title(self, s):
+    def draw_title(self, screen, layer):
         span_x = MAP_W * TILE - SCREEN_W
         span_y = MAP_H * TILE - SCREEN_H
         t = self.title_time * 12
         x = int(t) % (2 * span_x)
         x = x if x < span_x else 2 * span_x - x
-        s.blit(self.title_bg, (0, 0), (x, span_y // 2, SCREEN_W, SCREEN_H))
-        self.shade(s, 120)
+        screen.blit(self.title_bg, (0, 0), (x * RES, span_y // 2 * RES, DISPLAY_W, DISPLAY_H))
+        screen.blit(self.title_dim, (0, 0))
+        lineup = (("engineer", -170), ("rifleman", -125), ("medic", -80), ("heavy", -35),
+                  ("jeep", 35), ("tank", 125))
+        for kind, dx in lineup:   # marching at full resolution, blown up 2x
+            spr = self.sprites.unit(kind, PLAYER)
+            img, (ox, oy) = spr.frame("walk", int(self.title_time * 8), 20)
+            img = pygame.transform.scale(img, (img.get_width() * 2, img.get_height() * 2))
+            screen.blit(img, ((SCREEN_W // 2 + dx) * RES - ox * 2, 150 * RES - oy * 2))
+        s = layer.touch()
         draw_text(s, "Pixelfront", SCREEN_W // 2 + 2, 52, (40, 30, 20), shadow=None, scale=8, align="center")
         draw_text(s, "Pixelfront", SCREEN_W // 2, 50, (250, 220, 110), shadow=(120, 70, 30), scale=8, align="center")
         draw_text(s, "Desert warfare. Design your units. Hold the derricks.", SCREEN_W // 2, 100,
                   (230, 230, 230), align="center")
-
-        lineup = (("engineer", -170), ("rifleman", -125), ("medic", -80), ("heavy", -35),
-                  ("jeep", 35), ("tank", 125))
-        for kind, dx in lineup:
-            spr = self.sprites.unit(kind, PLAYER)
-            img, (ox, oy) = spr.frame("walk", int(self.title_time * 8), 20)
-            img = pygame.transform.scale(img, (img.get_width() * 2, img.get_height() * 2))
-            s.blit(img, (SCREEN_W // 2 + dx - ox * 2, 150 - oy * 2))
-
         if int(self.title_time * 2) % 2 == 0:
             draw_text(s, "Enter - Start game", SCREEN_W // 2, 162, (255, 255, 255), scale=2, align="center")
         draw_text(s, "T - Test range (practice targets, no AI)     M - Sprite motion test", SCREEN_W // 2, 180,
@@ -240,26 +252,31 @@ class App:
 
     def draw_controls(self, s, x, y):
         for i, (key, what) in enumerate(CONTROLS):
-            col = i // 7
-            row = i % 7
+            col = i // 8
+            row = i % 8
             cx = x + col * 240
             draw_text(s, key, cx, y + row * 11, (250, 220, 110))
             draw_text(s, what, cx + 92, y + row * 11, (220, 220, 230))
 
     def draw_help(self, s):
-        box = pygame.Rect(76, 70, 488, 100)
+        box = pygame.Rect(76, 66, 488, 114)
         pygame.draw.rect(s, (20, 16, 24), box)
         pygame.draw.rect(s, (110, 100, 122), box, 1)
         draw_text(s, "Controls", box.centerx, box.y + 6, (250, 220, 110), align="center")
         self.draw_controls(s, box.x + 14, box.y + 20)
 
     def draw_cursor(self, s):
+        """The pointer, drawn last at screen resolution in UI-sized pixels."""
         mx, my = pygame.mouse.get_pos()
+        k = RES
         mode = self.ctrl.mode if self.state == "play" else None
         if mode in TARGET_MODES:
             col = {"move": (90, 230, 90), "attack": (235, 70, 60), "repair": (250, 220, 90)}[mode]
             for dx, dy, w, h in ((-6, 0, 4, 1), (3, 0, 4, 1), (0, -6, 1, 4), (0, 3, 1, 4)):
-                pygame.draw.rect(s, (20, 20, 26), (mx + dx - 1, my + dy - 1, w + 2, h + 2))
-                pygame.draw.rect(s, col, (mx + dx, my + dy, w, h))
+                pygame.draw.rect(s, (20, 20, 26), (mx + (dx - 1) * k, my + (dy - 1) * k, (w + 2) * k, (h + 2) * k))
+                pygame.draw.rect(s, col, (mx + dx * k, my + dy * k, w * k, h * k))
         else:
-            s.blit(self.sprites.cursor, (mx, my))
+            if not hasattr(self, "_cursor_hi"):
+                c = self.sprites.cursor
+                self._cursor_hi = pygame.transform.scale(c, (c.get_width() * k, c.get_height() * k))
+            s.blit(self._cursor_hi, (mx, my))

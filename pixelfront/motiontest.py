@@ -1,14 +1,14 @@
 """Sprite motion test: every unit type running every animation on a loop, for reviewing art.
 
-Each cell is staged at 1x and blown up (infantry 4x, vehicles 2x) so it looks exactly like
-the game, only bigger.
+Each cell is staged at game resolution (RES screen pixels per game pixel, like the map view)
+and blown up (infantry 4x, vehicles 2x) so it looks exactly like the game, only bigger.
 """
 import math
 import random
 
 import pygame
 
-from .config import SCREEN_W, PLAYER, ENEMY, KNEEL_TIME, STEER_MAX
+from .config import SCREEN_W, PLAYER, ENEMY, KNEEL_TIME, STEER_MAX, RES
 from .units import UNITS
 from .font import draw_text
 from .modules import SLOTS, TIER_NAMES, weapon_of, slots_for, tiers, tier, slot_label, default_loadout, compute_stats
@@ -28,7 +28,7 @@ SAND, SAND_D = (220, 186, 124), (204, 168, 108)
 
 
 class Stage:
-    """1x staging area for one row: infantry get a smaller stage shown at 4x."""
+    """Staging area for one row, in game pixels: infantry get a smaller stage shown at 4x."""
 
     def __init__(self, kind):
         self.zoom = 4 if UNITS[kind]["cls"] == "infantry" else 2
@@ -210,8 +210,10 @@ class MotionTest:
 
     # ---- drawing ----------------------------------------------------------------
 
-    def draw(self, surf):
-        surf.fill((34, 30, 38))
+    def draw(self, screen, layer):
+        k = RES
+        screen.fill((34, 30, 38))
+        surf = layer.touch()
         draw_text(surf, "Sprite motion test", 6, 4, (250, 220, 110))
         tiers_txt = "   ".join(f"[{i}] {SLOTS[s]['label']}: {TIER_NAMES[self.levels[s]]}"
                                for i, s in enumerate(SLOTS, 1))
@@ -229,24 +231,27 @@ class MotionTest:
                 draw_text(surf, f"{slot_label(kind, slot)[:6]} {tier(kind, slot, lo[slot])['name']}",
                           4, y + 24 + j * 8, (160, 156, 170))
             for col in range(len(COLUMNS)):
-                cell = pygame.Surface((S.w, S.h))
+                cell = pygame.Surface((S.w * k, S.h * k))
                 cell.fill(SAND)
-                pygame.draw.line(cell, SAND_D, (0, S.ground + 2), (S.w, S.ground + 2))
+                pygame.draw.line(cell, SAND_D, (0, (S.ground + 2) * k), (S.w * k, (S.ground + 2) * k), k)
                 self.draw_cell(cell, kind, lo, col)
-                surf.blit(pygame.transform.scale(cell, (CELL_W, CELL_H)), (LABEL_W + col * CELL_W, y))
-                pygame.draw.rect(surf, (34, 30, 38), (LABEL_W + col * CELL_W, y, CELL_W, CELL_H), 1)
+                screen.blit(pygame.transform.scale(cell, (CELL_W * k, CELL_H * k)),
+                            ((LABEL_W + col * CELL_W) * k, y * k))
+                pygame.draw.rect(screen, (34, 30, 38), ((LABEL_W + col * CELL_W) * k, y * k, CELL_W * k, CELL_H * k), k)
 
     def blit_unit(self, cell, kind, lo, anim, i, facing, x, prone=False, unit_kind=None):
         S = self.stages[kind]
+        k = RES
         uk = unit_kind or kind
         spr = self.sp.unit(uk, self.team, lo)
-        draw_shadow(cell, int(x), S.ground, UNITS[uk]["radius"], prone)
+        draw_shadow(cell, int(x * k), S.ground * k, UNITS[uk]["radius"], prone)
         img, (ox, oy) = spr.frame(anim, i, facing)
-        cell.blit(img, (int(x) - ox, S.ground - oy))
+        cell.blit(img, (int(x * k) - ox, S.ground * k - oy))
 
     def draw_cell(self, cell, kind, lo, col):
         c = self.cells[kind]
         S = self.stages[kind]
+        k = RES
         infantry = UNITS[kind]["cls"] == "infantry"
         rate = WALK_RATE[UNITS[kind]["cls"]]
         mid = S.w // 2
@@ -256,9 +261,9 @@ class MotionTest:
                 self.blit_unit(cell, kind, lo, "idle", int(self.t * 2.5), (self.t * 45) % 360, mid)
             else:                                     # vehicles drive round with the wheels steered in
                 spr = self.sp.unit(kind, self.team, lo)
-                draw_shadow(cell, mid, S.ground, UNITS[kind]["radius"])
+                draw_shadow(cell, mid * k, S.ground * k, UNITS[kind]["radius"])
                 img, (ox, oy) = spr.frame("walk", int(self.t * rate), (self.t * 45) % 360, 0, -STEER_MAX)
-                cell.blit(img, (mid - ox, S.ground - oy))
+                cell.blit(img, (mid * k - ox, S.ground * k - oy))
         elif col == 1:                                # walking / driving
             facing = 0 if c["walk_dir"] > 0 else 180
             self.blit_unit(cell, kind, lo, "walk", int(c["walk_anim"] * rate), facing, c["walk_x"])
@@ -269,8 +274,8 @@ class MotionTest:
                     self.blit_unit(cell, kind, default_loadout("rifleman"), "prone", 0, 180, sx + 9,
                                    prone=True, unit_kind="rifleman")
                 else:
-                    pygame.draw.rect(cell, (120, 96, 60), (sx + 4, S.ground - 5, 6, 6))
-                    pygame.draw.rect(cell, K, (sx + 4, S.ground - 5, 6, 6), 1)
+                    pygame.draw.rect(cell, (120, 96, 60), ((sx + 4) * k, (S.ground - 5) * k, 6 * k, 6 * k))
+                    pygame.draw.rect(cell, K, ((sx + 4) * k, (S.ground - 5) * k, 6 * k, 6 * k), 1)
                 self.blit_unit(cell, kind, lo, "work", int(c["lunge"] > 0.05), 0, sx)
             else:
                 self.draw_dummy(cell, kind)
@@ -282,13 +287,14 @@ class MotionTest:
         elif col == 3:                                # pinned: crawl, then shoot from the dirt
             if not infantry:                          # vehicles: the turret traverses instead
                 if weapon_def(weapon_of(kind, lo))["fixed"]:
-                    self.blit_unit(cell, kind, lo, "idle", int(self.t * 10), 0, mid)
-                    draw_text(cell, "fixed gun", mid, 2, (120, 80, 50), shadow=None, align="center")
+                    self.blit_unit(cell, kind, lo, "idlegun", int(self.t * 2.0), 0, mid)
+                    draw_text(cell, "fixed gun", mid * k, 2 * k, (120, 80, 50), shadow=None, scale=k,
+                              align="center")
                 else:
                     spr = self.sp.unit(kind, self.team, lo)
-                    draw_shadow(cell, mid, S.ground, UNITS[kind]["radius"])
+                    draw_shadow(cell, mid * k, S.ground * k, UNITS[kind]["radius"])
                     img, (ox, oy) = spr.frame("idle", 0, 0, (self.t * 60) % 360)
-                    cell.blit(img, (mid - ox, S.ground - oy))
+                    cell.blit(img, (mid * k - ox, S.ground * k - oy))
                 return
             if (self.t % 4.0) < 2.5:
                 facing = 0 if c["crawl_dir"] > 0 else 180
@@ -304,41 +310,42 @@ class MotionTest:
                 d = dict(kind="wreck" if not infantry else "fall", unit=kind, team=self.team, loadout=lo,
                          facing=0, r=UNITS[kind]["radius"], life=DIE_CYCLE + 1.5)
                 if infantry:
-                    draw_shadow(cell, mid, S.ground, UNITS[kind]["radius"], age > 0.3)
-                draw_death(cell, self.sp, d, age, mid, S.ground)
+                    draw_shadow(cell, mid * k, S.ground * k, UNITS[kind]["radius"], age > 0.3)
+                draw_death(cell, self.sp, d, age, mid * k, S.ground * k)
             self.draw_effects(cell, c, "die")
 
     def draw_dummy(self, cell, kind):
         x, y = self.target_pos(kind)
         S = self.stages[kind]
-        r = 2 if UNITS[kind]["cls"] == "infantry" else 4
-        pygame.draw.rect(cell, (110, 80, 50), (x, y, 1, S.ground - y + 2))
-        pygame.draw.circle(cell, K, (x, y), r)
-        pygame.draw.circle(cell, (236, 236, 236), (x, y), r - 1)
-        cell.set_at((x, y), (210, 50, 40))
+        k = RES
+        r = (2 if UNITS[kind]["cls"] == "infantry" else 4) * k
+        pygame.draw.rect(cell, (110, 80, 50), (x * k, y * k, k, (S.ground - y + 2) * k))
+        pygame.draw.circle(cell, K, (x * k, y * k), r)
+        pygame.draw.circle(cell, (236, 236, 236), (x * k, y * k), r - 1)
+        pygame.draw.circle(cell, (210, 50, 40), (x * k, y * k), max(1, r // 3))
 
     def draw_effects(self, cell, c, which):
+        k = RES
         w, h = cell.get_size()
         if which == "fire":
             for tr in c["shots"]:
-                draw_tracer(cell, *tr)
+                draw_tracer(cell, tr[0] * k, tr[1] * k, tr[2] * k, tr[3] * k, tr[4], tr[5])
             for p in c["projectiles"]:
-                x, y = int(p["x"]), int(p["y"] - p["h"])
+                x, y = int(p["x"] * k), int((p["y"] - p["h"]) * k)
                 style = p["style"]
                 if p["arc"]:
-                    cell.fill((150, 120, 90), (int(p["x"]), int(p["y"]), 1, 1))
+                    cell.fill((150, 120, 90), (int(p["x"] * k), int(p["y"] * k), k, k))
                 if style in ("rocket", "atgm"):
-                    pygame.draw.line(cell, (220, 220, 220), (x, y), (x - 2, y))
-                    if 0 <= x < w and 0 <= y < h:
-                        cell.set_at((x, y), (255, 160, 60))
+                    pygame.draw.line(cell, (220, 220, 220), (x, y), (x - 2 * k, y))
+                    cell.fill((255, 160, 60), (x, y, k, k))
                 elif style == "grenade":
-                    cell.fill((50, 56, 40), (x, y, 1, 1))
+                    cell.fill((50, 56, 40), (x, y, k, k))
                 elif style == "autocannon":
-                    pygame.draw.line(cell, (255, 230, 140), (x, y), (x - 2, y))
+                    pygame.draw.line(cell, (255, 230, 140), (x, y), (x - 2 * k, y))
                 else:
-                    pygame.draw.rect(cell, (255, 230, 140), (x - 1, y - 1, 2, 2))
+                    pygame.draw.rect(cell, (255, 230, 140), (x - k, y - k, 2 * k, 2 * k))
             for b in c["booms"]:
-                draw_explosion(cell, int(b[0]), int(b[1]), b[2] / 0.25, 2)
+                draw_explosion(cell, int(b[0] * k), int(b[1] * k), b[2] / 0.25, 2)
         for p in c["particles"]:
-            if p[7] == which and 0 <= p[0] < w and 0 <= p[1] < h:
-                cell.set_at((int(p[0]), int(p[1])), p[5])
+            if p[7] == which and 0 <= p[0] * k < w and 0 <= p[1] * k < h:
+                cell.fill(p[5], (int(p[0] * k), int(p[1] * k), k, k))

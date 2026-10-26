@@ -1,7 +1,11 @@
 """Game-wide constants and unit/building definitions."""
 
-# Logical resolution; the window scales this up with nearest-neighbour filtering.
+# The UI (panels, sidebar, pixel font) lives on a 640x360 grid; the game world and its art are
+# drawn RES times finer, so the window shows SCREEN_W*RES x SCREEN_H*RES pixels, scaled up with
+# nearest-neighbour filtering. World coordinates stay in game pixels (16 per tile).
 SCREEN_W, SCREEN_H = 640, 360
+RES = 2
+DISPLAY_W, DISPLAY_H = SCREEN_W * RES, SCREEN_H * RES
 TILE = 16
 MAP_W, MAP_H = 64, 64
 HUD_H = 80

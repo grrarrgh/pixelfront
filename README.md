@@ -19,6 +19,9 @@ python main.py
 
 This produces a single self-contained `dist\Pixelfront.exe`.
 
+The game window shows 1280×720 pixels, scaled up to fit the screen (an exact 2× on 2560×1440).
+The world is drawn at that full resolution; the HUD is laid out on a 640×360 grid and doubled.
+
 ## Tests
 
 ```powershell
@@ -184,9 +187,10 @@ Medics and engineers have to be touching whoever or whatever they heal, repair o
 | `pixelfront/entities.py` | Entity base class, buildings (incl. bunker garrison fire), capture points |
 | `pixelfront/game.py` | Simulation: economy, capturing, combat, construction, win check, test range |
 | `pixelfront/ai.py` | Computer opponent |
-| `pixelfront/model3d.py` | Units and buildings as small 3D models (per loadout and pose) and the renderer that turns them into pixel art |
+| `pixelfront/model3d.py` | Units and buildings as small 3D models (per loadout and pose) built from boxes, cylinders and extruded shapes, and the renderer that turns them into pixel art |
 | `pixelfront/sprites.py` | Unit frames per facing and animation, building images per construction stage (rendered on demand, cached), icons, terrain |
 | `pixelfront/render.py`, `hud.py`, `design.py` | Map view (incl. flags and garrison animations), control panel and build sidebar, design popup |
+| `pixelfront/layer.py` | Screen composition: the world at full resolution, the 640×360 UI layer doubled on top, mouse positions mapped back to the UI grid |
 | `pixelfront/motiontest.py` | Sprite motion test scene |
 | `pixelfront/controller.py` | Mouse/keyboard to orders |
 | `pixelfront/app.py` | Window, main loop, title/pause/design/game-over screens |

@@ -2,6 +2,39 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.12.0 "Fine Grain" (2026-10-27)
+
+Twice the pixel detail, and redesigned units and buildings to make use of it.
+
+### Changed
+
+- **Double pixel density.** The game world is now drawn at 1280×720 instead of 640×360: an exact 2× on a 2560×1440 screen.
+  - Units, buildings, terrain, cliffs, flags, garrison heads and effects all use the finer pixels.
+  - The HUD, sidebar and text keep their size and chunky look. The unit and building pictures inside them (sidebar icons, portraits, design previews) use the new detail.
+  - On a 1920×1080 screen the window scales by 1.5×, so pixels come out slightly uneven.
+- **Slimmer health bars** over units and buildings, to suit the finer art.
+
+### Added
+
+- **Round wheels and tracks:**
+  - Wheels are round tyres with a rim, hub, wheel nuts and tread grooves that turn as they roll.
+  - Track runs have rounded ends, with links that crawl around them, round road wheels, a drive sprocket and an idler.
+  - Barrels, launch tubes and the jeep's spare wheel are round too, and half-tracks have curved mudguards.
+- **More detailed infantry:**
+  - Rounded limbs and heads, with faces (eyes, brows, nose, mouth, ears).
+  - Domed helmets with goggles and chin straps.
+  - Plate carriers with magazine pouches, a radio and straps; webbing for unarmoured soldiers; belts, buckles and canteens.
+  - Boots with soles and laces, cargo pockets, knee and elbow pads, and gloves.
+  - Weapons rebuilt with stocks, grips, magazines, optics and round barrels. The M60 gets an ammo belt and bipod, and the rocket launcher is a proper tube.
+- **Detail lines on buildings:** every building and vehicle has fine dark edge lines.
+  - The Vehicle Yard has an arched, corrugated roof with seams and team trim, grooved wall cladding, a framed roller door and a lattice crane.
+  - The Command Center has panel seams and window and door frames; the barracks have pour lines.
+- **Smoother terrain:** cliff edges, dune patches and the rocky base pads have smooth, pixel-fine outlines instead of following the tiles. Ramps are single contoured shapes with a slope, treads and a spill of sand at the foot.
+
+### Fixed
+
+- The title screen's list of controls no longer runs off the right edge.
+
 ## 0.11.0 "High Ground" (2026-10-26)
 
 Cliffs that matter: plateaus with ramps, contoured rock, height-based vision and livelier idle units.

@@ -5,6 +5,7 @@ import pygame
 
 from .config import (SCREEN_W, SCREEN_H, VIEW_W, VIEW_H, TILE, MAP_W, MAP_H, PLAYER, NEUTRAL, BUILDINGS,
                      CAMERA_SPEED, EDGE_SCROLL)
+from .layer import ui_mouse
 from .modules import loadout_cost, loadout_summary, loadout_time
 from .units import UNITS
 
@@ -58,7 +59,7 @@ class Controller:
         dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
         dy = (keys[pygame.K_DOWN] or keys[pygame.K_s]) - (keys[pygame.K_UP] or keys[pygame.K_w])
         if pygame.mouse.get_focused() and not self.pan and not self.minimap_drag and not self.dragging:
-            mx, my = pygame.mouse.get_pos()
+            mx, my = ui_mouse()
             if mx <= EDGE_SCROLL:
                 dx -= 1
             elif mx >= SCREEN_W - 1 - EDGE_SCROLL:

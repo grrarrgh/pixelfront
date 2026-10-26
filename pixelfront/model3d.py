@@ -54,7 +54,10 @@ def _rotate(p, axis, deg, pivot):
 
 class Box:
     """A box in model space, optionally rotated (rot = [(axis, degrees, pivot), ...], applied in
-    order). glow boxes ignore lighting; fixed boxes ignore the whole-body fall."""
+    order). glow boxes ignore lighting; fixed boxes ignore the whole-body fall.
+
+    Every shape (Box, Ext, Cyl) offers geometry() -> (points, faces as index lists, an inside
+    point), already rotated, which is all render() needs."""
     __slots__ = ("pos", "size", "color", "rot", "glow", "fixed")
 
     def __init__(self, pos, size, color, rot=(), glow=False, fixed=False):
@@ -68,13 +71,100 @@ class Box:
             pts = [_rotate(p, axis, deg, pivot) for p in pts]
         return pts
 
+    def geometry(self):
+        pts = self.corners()
+        inside = tuple(sum(p[j] for p in pts) / 8 for j in range(3))
+        return pts, _FACES, inside
+
+    def moved(self, rot=(), dz=0.0):
+        """A copy with extra rotations appended and/or lifted by dz (pivots too)."""
+        r = tuple((ax, deg, (q[0], q[1], q[2] + dz)) for ax, deg, q in self.rot) + tuple(rot)
+        return Box((self.pos[0], self.pos[1], self.pos[2] + dz), self.size, self.color, r, self.glow, self.fixed)
+
+
+class Ext:
+    """A convex 2D profile extruded along an axis: profile points (u, v) lie across `axis`
+    ('x': (y, z), 'y': (x, z), 'z': (x, y)), the solid runs from a0 to a1 along it, and the
+    whole thing is offset by `pos`. Used for round wheels, rounded track runs, barrels, domes."""
+    __slots__ = ("pos", "profile", "axis", "a0", "a1", "color", "rot", "glow", "fixed")
+
+    def __init__(self, pos, profile, axis, a0, a1, color, rot=(), glow=False, fixed=False):
+        self.pos, self.profile, self.axis, self.a0, self.a1 = pos, profile, axis, a0, a1
+        self.color, self.rot, self.glow, self.fixed = color, rot, glow, fixed
+
+    def _point(self, u, v, a):
+        x, y, z = {"x": (a, u, v), "y": (u, a, v), "z": (u, v, a)}[self.axis]
+        return (self.pos[0] + x, self.pos[1] + y, self.pos[2] + z)
+
+    def geometry(self):
+        n = len(self.profile)
+        pts = [self._point(u, v, self.a0) for u, v in self.profile] + \
+              [self._point(u, v, self.a1) for u, v in self.profile]
+        for axis, deg, pivot in self.rot:
+            pts = [_rotate(p, axis, deg, pivot) for p in pts]
+        inside = tuple(sum(p[j] for p in pts) / len(pts) for j in range(3))
+        faces = [tuple(range(n)), tuple(range(2 * n - 1, n - 1, -1))]
+        faces += [(i, (i + 1) % n, n + (i + 1) % n, n + i) for i in range(n)]
+        return pts, faces, inside
+
+    def moved(self, rot=(), dz=0.0):
+        r = tuple((ax, deg, (q[0], q[1], q[2] + dz)) for ax, deg, q in self.rot) + tuple(rot)
+        return Ext((self.pos[0], self.pos[1], self.pos[2] + dz), self.profile, self.axis, self.a0, self.a1,
+                   self.color, r, self.glow, self.fixed)
+
+
+def circle(r, n=14, ry=None, start=0.0):
+    """Profile points of a circle (or ellipse, with ry) of radius r."""
+    ry = r if ry is None else ry
+    return [(r * math.cos(start + math.tau * i / n), ry * math.sin(start + math.tau * i / n)) for i in range(n)]
+
+
+def stadium(length, r, n=6):
+    """Profile of a rounded-end bar (a track run seen from the side): `length` overall, ends of radius r."""
+    half = length / 2 - r
+    pts = [(half + r * math.cos(-math.pi / 2 + math.pi * i / n), r * math.sin(-math.pi / 2 + math.pi * i / n))
+           for i in range(n + 1)]
+    pts += [(-half + r * math.cos(math.pi / 2 + math.pi * i / n), r * math.sin(math.pi / 2 + math.pi * i / n))
+            for i in range(n + 1)]
+    return pts
+
+
+def rrect(w, d, r, n=3):
+    """Profile of a rectangle w x d with corners rounded to radius r."""
+    pts = []
+    for cx, cy, a0 in ((w / 2 - r, d / 2 - r, 0), (-w / 2 + r, d / 2 - r, 90),
+                       (-w / 2 + r, -d / 2 + r, 180), (w / 2 - r, -d / 2 + r, 270)):
+        for i in range(n + 1):
+            ang = math.radians(a0 + 90 * i / n)
+            pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+    return pts
+
+
+def _adders(B):
+    """add(box args), cyl(pos, r, length, axis, colour, rot) and ext(...) appending to list B."""
+    def add(*a, **k):
+        B.append(Box(*a, **k))
+
+    def cyl(pos, r, length, axis, col, rot=(), n=10, glow=False):
+        B.append(Cyl(pos, r, length, axis, col, rot, glow, n=n))
+
+    def ext(pos, profile, axis, a0, a1, col, rot=(), glow=False):
+        B.append(Ext(pos, profile, axis, a0, a1, col, rot, glow))
+    return add, cyl, ext
+
+
+def Cyl(pos, r, length, axis, color, rot=(), glow=False, fixed=False, n=14, ry=None):
+    """A cylinder of radius r (ellipse with ry) and `length` along `axis`, centred on pos."""
+    return Ext(pos, circle(r, n, ry), axis, -length / 2, length / 2, color, rot, glow, fixed)
+
 
 def render(boxes, facing, fall=0.0, lift=0.0, outline=True, darken=1.0, scale=1.0, ss=1, texture=0.0,
-           bounds=None):
-    """Render boxes facing `facing` degrees (0 = east, 90 = south). Returns (surface, origin)
+           bounds=None, edges=None):
+    """Render shapes facing `facing` degrees (0 = east, 90 = south). Returns (surface, origin)
     where origin is the pixel that sits on the model's ground position. texture > 0 adds
     that much pixel grain (used for buildings). Pass the same `bounds` (from measure()) to
-    every frame of an animation to keep them on one fixed canvas, so static parts don't jitter."""
+    every frame of an animation to keep them on one fixed canvas, so static parts don't jitter.
+    edges = a shade factor (e.g. 0.6) to draw every face's edges darker, as fine detail lines."""
     a = math.radians(facing)
     ca, sa = math.cos(a), math.sin(a)
     k = scale * ss
@@ -82,22 +172,28 @@ def render(boxes, facing, fall=0.0, lift=0.0, outline=True, darken=1.0, scale=1.
     minx = miny = 1e9
     maxx = maxy = -1e9
     for b in boxes:
-        pts = b.corners()
+        pts, polys, inside = b.geometry()
         if fall and not b.fixed:
             pts = [_rotate(p, "pitch", fall, (0, 0, 0)) for p in pts]
+            inside = _rotate(inside, "pitch", fall, (0, 0, 0))
         up = 0 if b.fixed else lift
         world = [((x * ca + y * sa) * k, (x * sa - y * ca) * k, (z + up) * k) for x, y, z in pts]
-        cx = sum(p[0] for p in world) / 8
-        cy = sum(p[1] for p in world) / 8
-        cz = sum(p[2] for p in world) / 8
-        for f in _FACES:
-            p0, p1, p3 = world[f[0]], world[f[1]], world[f[3]]
-            u = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
-            v = (p3[0] - p0[0], p3[1] - p0[1], p3[2] - p0[2])
-            n = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
-            ln = math.sqrt(n[0] ** 2 + n[1] ** 2 + n[2] ** 2) or 1.0
-            n = (n[0] / ln, n[1] / ln, n[2] / ln)
-            fc = [sum(world[i][j] for i in f) / 4 for j in range(3)]
+        ix, iy, iz = inside
+        cx, cy, cz = (ix * ca + iy * sa) * k, (ix * sa - iy * ca) * k, (iz + up) * k
+        for f in polys:
+            # Newell's method: a robust normal for any planar polygon.
+            nx = ny = nz = 0.0
+            m = len(f)
+            for j in range(m):
+                p0, p1 = world[f[j]], world[f[(j + 1) % m]]
+                nx += (p0[1] - p1[1]) * (p0[2] + p1[2])
+                ny += (p0[2] - p1[2]) * (p0[0] + p1[0])
+                nz += (p0[0] - p1[0]) * (p0[1] + p1[1])
+            ln = math.sqrt(nx * nx + ny * ny + nz * nz)
+            if ln < 1e-9:
+                continue
+            n = (nx / ln, ny / ln, nz / ln)
+            fc = [sum(world[i][j] for i in f) / m for j in range(3)]
             if n[0] * (fc[0] - cx) + n[1] * (fc[1] - cy) + n[2] * (fc[2] - cz) < 0:
                 n = (-n[0], -n[1], -n[2])
             if n[0] * VIEW[0] + n[1] * VIEW[1] + n[2] * VIEW[2] <= 0.01:
@@ -112,7 +208,8 @@ def render(boxes, facing, fall=0.0, lift=0.0, outline=True, darken=1.0, scale=1.
             for x, y in pts2:
                 minx, maxx = min(minx, x), max(maxx, x)
                 miny, maxy = min(miny, y), max(maxy, y)
-            faces.append((fc[1] * COS_E + fc[2] * SIN_E, pts2, col))
+            line = shade(col, edges) if edges and not b.glow else col
+            faces.append((fc[1] * COS_E + fc[2] * SIN_E, pts2, col, line))
     if bounds == "measure":
         return (minx / k, maxx / k, miny / k, maxy / k)
     if not faces:
@@ -127,10 +224,10 @@ def render(boxes, facing, fall=0.0, lift=0.0, outline=True, darken=1.0, scale=1.
     w += (-w) % ss
     h += (-h) % ss
     surf = pygame.Surface((w, h), pygame.SRCALPHA)
-    for _, pts, col in faces:
+    for _, pts, col, line in faces:
         moved = [(x + ox, y + oy) for x, y in pts]
         pygame.draw.polygon(surf, col, moved)
-        pygame.draw.polygon(surf, col, moved, 1)
+        pygame.draw.polygon(surf, line, moved, 1)
     if ss > 1:
         surf = _downsample(surf, ss)
         ox, oy = ox / ss, oy / ss
@@ -344,16 +441,16 @@ def soldier(kind, light, lo, anim="idle", i=0):
     if anim == "check":   # tilt the weapon up and back down to look it over
         arms = {s: (sp + (14 if i else 4) * (1 if s == -1 else 0.6), ep - (16 if i else 0), a, b)
                 for s, (sp, ep, a, b) in arms.items()}
-    _legs(add, tc, armor, speed, legs)
+    _legs(B, tc, armor, speed, legs)
     upper_from = len(B)   # everything after the legs breathes in the idle animation
-    _body(add, kind, tc, armor, weapon, speed, moving)
-    _arms(add, kind, tc, armor, weapon, arms)
+    _body(B, kind, tc, armor, weapon, speed, moving)
+    _arms(B, kind, tc, armor, weapon, arms)
     W = []
     wadd = lambda *a, **k: W.append(Box(*a, **k))
-    muzzle = _weapon(wadd, kind, gun, act, recoil)
+    muzzle = _weapon(W, kind, gun, act, recoil)
     if anim == "check" and gun:   # weapon tipped up, close to the face
         tilt = ("pitch", -(18 if i else 8), (0, 0, 12))
-        W = [Box(b.pos, b.size, b.color, tuple(b.rot) + (tilt,), b.glow) for b in W]
+        W = [b.moved(rot=(tilt,)) for b in W]
         muzzle = _rotate(muzzle, *tilt) if muzzle else muzzle
     if shield:   # ballistic shield on the left arm, with a vision slit
         wadd((3.6, 3.4, 10.6), (0.8, 5.0, 9.6), tc["plate"])
@@ -364,7 +461,7 @@ def soldier(kind, light, lo, anim="idle", i=0):
     if prone:
         # Weapons are held up overhead in the standing frame so they lie forward once prone.
         pr = ("pitch", 90, (0, 0, 13))
-        W = [Box(b.pos, b.size, b.color, tuple(b.rot) + (pr,), b.glow) for b in W]
+        W = [b.moved(rot=(pr,)) for b in W]
         if muzzle:
             muzzle = _rotate(muzzle, *pr)
     B += W
@@ -393,13 +490,16 @@ IDLE_ELEV = (0, 3, 7, 11, 14, 11, 7, 3)  # fixed-gun barrel elevation per "idleg
 
 
 def _raised(boxes, dz):
-    """The same boxes lifted by dz (rotation pivots too, so limbs stay attached)."""
-    return [Box((b.pos[0], b.pos[1], b.pos[2] + dz), b.size, b.color,
-                tuple((ax, deg, (p[0], p[1], p[2] + dz)) for ax, deg, p in b.rot), b.glow, b.fixed)
-            for b in boxes]
+    """The same shapes lifted by dz (rotation pivots too, so limbs stay attached)."""
+    return [b.moved(dz=dz) for b in boxes]
 
 
-def _legs(add, tc, armor, speed, legs):
+POLY = (72, 76, 84)          # polymer gun furniture
+STRAP = (44, 40, 38)
+
+
+def _legs(B, tc, armor, speed, legs):
+    add, cyl, _ = _adders(B)
     pants = KHAKI_D if armor == 0 else tc["pants"]
     boot = BROWN_D if speed == 0 else BOOT
     for s in (1, -1):
@@ -409,68 +509,113 @@ def _legs(add, tc, armor, speed, legs):
         thigh_rot = (("pitch", hip, hp), ("roll", hroll, hp))
         shin_rot = (("pitch", knee, kp), ("roll", kroll, kp)) + thigh_rot
         col = pants if s < 0 else shade(pants, 0.92)
-        add((0, y, (HIP_Z + KNEE_Z) / 2), (2.6, 2.4, HIP_Z - KNEE_Z + 0.4), col, thigh_rot)
-        add((0, y, 2.9), (2.4, 2.2, 3.2), col, shin_rot)
-        add((0.6, y, 0.9), (3.8, 2.6, 1.8), boot, shin_rot)
+        cyl((0, y, (HIP_Z + KNEE_Z) / 2), 1.32, HIP_Z - KNEE_Z + 0.5, "z", col, thigh_rot, n=8)
+        add((0.15, y + s * 1.18, 6.3), (1.5, 0.45, 1.7), shade(col, 0.84), thigh_rot)     # cargo pocket
+        add((0.15, y + s * 1.42, 7.05), (1.6, 0.12, 0.3), shade(col, 0.64), thigh_rot)    # its flap
+        cyl((0, y, 3.05), 1.18, 3.1, "z", col, shin_rot, n=8)
+        add((0, y, 2.2), (2.5, 2.5, 0.35), shade(col, 0.78), shin_rot)                    # trousers bloused into boots
+        add((0.45, y, 1.2), (3.1, 2.3, 1.5), boot, shin_rot)                              # boot
+        add((1.5, y, 0.7), (1.5, 2.2, 1.1), shade(boot, 1.12), shin_rot)                  # toe cap
+        add((0.6, y, 0.15), (4.0, 2.45, 0.3), (26, 22, 22), shin_rot)                     # sole
+        add((1.0, y, 1.85), (1.0, 1.0, 0.22), shade(boot, 1.6), shin_rot)                 # laces
         if armor == 2:
-            add((1.3, y, 4.6), (0.7, 2.4, 1.8), METAL, shin_rot)     # knee plate
+            add((1.3, y, 4.6), (0.8, 2.4, 2.0), METAL, shin_rot)                          # knee plate
+            add((1.72, y, 4.6), (0.1, 1.6, 0.25), METAL_D, shin_rot)
+        elif armor == 1:
+            add((1.2, y, 4.5), (0.6, 2.0, 1.5), (54, 54, 60), shin_rot)                   # knee pad
         if speed == 2:
             add((-1.2, y, 1.0), (0.5, 2.0, 0.8), CYAN, shin_rot, glow=True)
 
 
-def _body(add, kind, tc, armor, weapon, speed, moving):
+def _body(B, kind, tc, armor, weapon, speed, moving):
     # Armour never changes a soldier's size, only how much of them is plated:
     # light = fatigues and bare head, medium = helmet + body armour,
     # heavy = helmet + body armour + shoulder, elbow and knee plates.
+    add, cyl, ext = _adders(B)
     vest = tc["T"]
     hat = tc["T"]
-    add((0, 0, 11.6), (3.6, 6.0, 7.2), KHAKI)
-    add((0, 0, 8.6), (3.9, 6.3, 1.0), BROWN_D)
+    ext((0, 0, 0), rrect(3.6, 6.0, 1.0), "z", 8.0, 15.2, KHAKI)                       # torso
+    ext((0, 0, 0), rrect(3.9, 6.3, 1.0), "z", 8.1, 9.1, BROWN_D)                      # belt
+    add((1.98, 0, 8.6), (0.25, 1.0, 0.7), METAL_L)                                     # buckle
+    ext((0.15, 0, 0), rrect(2.6, 3.6, 0.8), "z", 14.9, 15.5, shade(KHAKI, 0.84))       # collar
+    cyl((0.15, 0, 15.75), 0.95, 0.9, "z", shade(SKIN, 0.9))                            # neck
+    cyl((-1.3, 3.05, 8.9), 0.75, 1.8, "z", OLIVE_D)                                    # canteen on the hip
+    add((-1.3, 3.05, 9.95), (0.6, 0.6, 0.3), GUN)
     if armor >= 1:
-        add((0.1, 0, 12.2), (4.2, 6.3, 5.0), vest)
-        add((2.25, -1.4, 11.4), (0.3, 1.6, 1.6), shade(vest, 0.8))
-        add((2.25, 1.4, 11.4), (0.3, 1.6, 1.6), shade(vest, 0.8))
-        add((0.1, 0, 14.6), (4.0, 5.4, 0.4), shade(vest, 1.15))
-    fx = 2.3 if armor else 1.85
-    if kind == "engineer":
-        add((fx, 0, 11.0), (0.3, 6.1, 0.7), YELLOW)
-    if kind == "medic":   # red cross on a white patch
-        add((fx, 1.2, 13.0), (0.25, 2.6, 2.6), WHITE)
-        add((fx + 0.05, 1.2, 13.0), (0.3, 0.6, 1.8), RED)
-        add((fx + 0.05, 1.2, 13.0), (0.3, 1.8, 0.6), RED)
-
-    # Head: stacked boxes so heads and helmets read as rounded.
-    add((0.2, 0, 17.0), (3.4, 3.4, 3.2), SKIN)
-    add((0.2, 0, 18.7), (2.6, 2.6, 0.6), SKIN)
-    add((1.95, 0.8, 17.6), (0.2, 0.6, 0.6), (40, 30, 30))
-    if armor == 0:
-        add((-0.2, 0, 19.2), (3.0, 3.2, 0.6), BROWN_D)
-        add((-1.3, 0, 18.0), (0.8, 3.2, 2.4), BROWN_D)
+        ext((0.1, 0, 0), rrect(4.2, 6.4, 0.9), "z", 9.6, 14.8, vest)                  # plate carrier
+        add((2.18, 0, 14.7), (0.2, 4.6, 0.3), shade(vest, 1.2))                       # its top edge
+        for y in (-1.55, 0.0, 1.55):                                                   # magazine pouches
+            add((2.35, y, 10.7), (0.7, 1.3, 1.9), shade(vest, 0.74))
+            add((2.45, y, 11.55), (0.75, 1.35, 0.35), shade(vest, 0.92))
+        add((0.3, -3.35, 12.0), (1.8, 0.6, 2.2), shade(vest, 0.7))                   # radio pouch
+        add((-0.3, -3.35, 14.4), (0.25, 0.25, 3.0), GUN)                              # whip antenna
+        for y in (-2.0, 2.0):
+            add((0, y, 15.0), (4.0, 1.3, 0.4), shade(vest, 0.85))                     # shoulder straps
+        add((2.35, 1.6, 13.6), (0.15, 1.2, 0.8), shade(vest, 1.35))                  # ID patch
     else:
-        add((0, 0, 18.9), (4.0, 4.0, 1.8), hat)
-        add((0, 0, 20.1), (3.0, 3.0, 0.8), hat)
-        add((2.0, 0, 17.9), (0.4, 3.0, 1.0), CYAN, glow=True)
+        for y in (-1.3, 1.3):                                                          # webbing straps
+            add((1.85, y, 12.0), (0.2, 0.6, 6.2), STRAP)
+            add((-1.85, y, 12.0), (0.2, 0.6, 6.2), STRAP)
+        for y in (-2.3, 2.3):
+            add((1.95, y, 9.3), (0.8, 1.1, 1.1), OLIVE_D)                             # belt pouches
+    fx = 2.35 if armor else 1.9
+    if kind == "engineer":                                                             # reflective stripes
+        for z in (10.6, 12.8):
+            add((fx + 0.1, 0, z), (0.25, 6.2, 0.5), YELLOW)
+    if kind == "medic":   # red cross on a white patch
+        add((fx + 0.05, 1.2, 13.0), (0.25, 2.6, 2.6), WHITE)
+        add((fx + 0.1, 1.2, 13.0), (0.3, 0.6, 1.8), RED)
+        add((fx + 0.1, 1.2, 13.0), (0.3, 1.8, 0.6), RED)
+
+    # Head: a rounded column with a face.
+    cyl((0.2, 0, 17.1), 1.75, 3.0, "z", SKIN, n=10)
+    cyl((0.2, 0, 18.75), 1.4, 0.5, "z", SKIN, n=10)
+    for y in (0.7, -0.7):
+        add((1.93, y, 17.65), (0.25, 0.55, 0.5), (34, 28, 30))                       # eyes
+        add((1.96, y, 18.15), (0.2, 0.75, 0.22), (90, 60, 40))                       # brows
+        add((0.2, y * 2.5, 17.3), (0.7, 0.35, 0.9), shade(SKIN, 0.86))               # ears
+    add((2.08, 0, 17.15), (0.45, 0.55, 0.75), shade(SKIN, 1.06))                      # nose
+    add((1.98, 0, 16.35), (0.15, 0.9, 0.22), (150, 92, 78))                           # mouth
+    if armor == 0:
+        hair = BROWN_D
+        cyl((0.0, 0, 18.95), 1.85, 0.65, "z", hair, n=10)
+        add((-1.25, 0, 17.9), (0.9, 3.3, 2.2), hair)
+    else:
+        cyl((0, 0, 17.95), 2.3, 0.28, "z", shade(hat, 0.72), n=12)                   # helmet rim
+        cyl((0, 0, 18.6), 2.15, 1.1, "z", hat, n=12)                                  # shell
+        cyl((0, 0, 19.4), 1.9, 0.6, "z", hat, n=12)
+        cyl((0, 0, 19.9), 1.45, 0.45, "z", shade(hat, 1.06), n=12)
+        cyl((0, 0, 20.2), 0.85, 0.2, "z", shade(hat, 1.1), n=10)
+        cyl((0, 0, 18.75), 2.2, 0.32, "z", (38, 38, 42), n=12)                       # goggle strap
+        for y in (0.75, -0.75):
+            add((1.95, y, 18.75), (0.5, 0.95, 0.55), CYAN, glow=True)                 # goggles, pushed up
+        for y in (1.78, -1.78):
+            add((0.7, y, 16.8), (0.25, 0.15, 1.9), STRAP)                             # chin straps
         if kind == "medic":
-            add((0, 0, 20.5), (2.6, 2.6, 0.15), WHITE)
-            add((0, 0, 20.6), (1.8, 0.6, 0.2), RED)
-            add((0, 0, 20.6), (0.6, 1.8, 0.2), RED)
+            cyl((0, 0, 20.36), 0.95, 0.12, "z", WHITE)
+            add((0, 0, 20.45), (1.5, 0.5, 0.15), RED)
+            add((0, 0, 20.45), (0.5, 1.5, 0.15), RED)
         elif kind == "engineer":
-            add((0, 0, 19.0), (4.1, 4.1, 0.6), YELLOW)
+            cyl((0, 0, 18.95), 2.18, 0.5, "z", YELLOW, n=12)
 
     # Back gear: speed slot (a heavy kit backpack takes the rucksack's place; the bedroll stays).
     backpack = kind in ("medic", "engineer") and weapon == 2
     if speed == 0:
         if not backpack:
-            add((-3.7, 0, 12.0), (3.2, 5.2, 6.0), OLIVE)
-            add((-3.6, 0, 15.2), (3.4, 5.4, 1.0), OLIVE_D)
-        add((-3.4, 0, 16.6), (2.6, 6.4, 2.2), (96, 104, 74))
+            ext((-3.7, 0, 0), rrect(3.0, 5.2, 0.8), "z", 9.0, 15.0, OLIVE)            # rucksack
+            ext((-3.65, 0, 0), rrect(3.2, 5.4, 0.8), "z", 14.4, 15.4, OLIVE_D)        # its lid
+            for y in (-1.6, 1.6):
+                add((-5.25, y, 11.4), (0.35, 1.4, 2.4), OLIVE_D)                       # pockets
+        cyl((-3.4, 0, 16.6), 1.15, 6.2, "y", (96, 104, 74), n=10)                    # bedroll
+        for y in (-1.8, 1.8):
+            cyl((-3.4, y, 16.6), 1.22, 0.3, "y", STRAP, n=10)
     elif speed == 2:
-        add((-3.0, 0, 12.4), (2.4, 4.4, 5.0), GUN)
+        ext((-3.0, 0, 0), rrect(2.4, 4.4, 0.7), "z", 9.9, 14.9, GUN)                  # thruster pack
         add((-4.25, 0, 13.0), (0.2, 3.6, 0.6), CYAN, glow=True)
         for s in (1, -1):
-            add((-3.0, s * 1.2, 9.4), (1.6, 1.4, 1.4), METAL_D)
+            cyl((-3.0, s * 1.2, 9.4), 0.75, 1.4, "z", METAL_D, n=8)
             if moving:
-                add((-3.0, s * 1.2, 8.2), (1.2, 1.0, 1.4), FLAME, glow=True)
+                cyl((-3.0, s * 1.2, 8.2), 0.55, 1.4, "z", FLAME, glow=True, n=8)
     if backpack:
         _kit_backpack(add, kind, -3.6 if speed != 2 else -5.0)
     if kind in ("medic", "engineer") and weapon == 0:
@@ -482,8 +627,9 @@ def _body(add, kind, tc, armor, weapon, speed, moving):
         add((sx, 0, 12.4), (0.25, 0.8, 7.2), BROWN, (("roll", -45, (sx, 0, 12.4)),))
 
 
-def _arms(add, kind, tc, armor, weapon, arms):
-    glove = GUN if armor == 2 else SKIN
+def _arms(B, kind, tc, armor, weapon, arms):
+    add, cyl, _ = _adders(B)
+    glove = (52, 50, 54) if armor >= 1 else SKIN
     carry = kind if kind in ("medic", "engineer") and weapon == 1 else None
     for s in (1, -1):
         sp, ep, sr, er = arms[s]
@@ -491,9 +637,14 @@ def _arms(add, kind, tc, armor, weapon, arms):
         shp, elp = (0, y, SHOULDER_Z), (0, y, ELBOW_Z)
         upper = (("pitch", sp, shp), ("roll", sr, shp))
         lower = (("pitch", ep, elp), ("roll", er, elp)) + upper
-        add((0, y, (SHOULDER_Z + ELBOW_Z) / 2), (2.0, 2.0, SHOULDER_Z - ELBOW_Z + 0.4), KHAKI, upper)
-        add((0, y, ELBOW_Z - 1.3), (1.9, 1.9, 2.6), KHAKI, lower)
-        add((0, y, ELBOW_Z - 3.2), (2.0, 2.0, 1.3), glove, lower)
+        cyl((0, y, (SHOULDER_Z + ELBOW_Z) / 2), 1.02, SHOULDER_Z - ELBOW_Z + 0.6, "z", KHAKI, upper, n=8)
+        cyl((0, y, ELBOW_Z - 1.3), 0.94, 2.7, "z", KHAKI, lower, n=8)
+        if armor == 0:
+            cyl((0, y, ELBOW_Z - 0.9), 1.02, 0.5, "z", shade(KHAKI, 0.84), lower, n=8)   # rolled sleeves
+        cyl((0, y, ELBOW_Z - 3.2), 0.92, 1.3, "z", glove, lower, n=8)                  # hand
+        add((0.7, y, ELBOW_Z - 3.35), (0.6, 1.1, 0.9), glove, lower)                   # thumb and fingers
+        if armor == 1:
+            add((0, y, ELBOW_Z), (2.1, 2.1, 0.8), (54, 54, 60), lower)                 # elbow pad
         if armor == 0:
             # No helmet or vest to carry the team colour: bandanas knotted round both arms.
             add((0, y, SHOULDER_Z - 1.2), (2.4, 2.4, 1.0), tc["T"], upper)
@@ -509,6 +660,7 @@ def _arms(add, kind, tc, armor, weapon, arms):
             add((-0.65, y, top), (1.0, 2.3, 0.5), METAL_L, upper)
         if armor == 2:
             add((0, y, SHOULDER_Z - 0.4), (2.5, 2.3, 1.6), METAL, upper)   # shoulder plate
+            add((0.2, y, SHOULDER_Z + 0.42), (2.0, 1.9, 0.1), METAL_D, upper)
             add((0, y, ELBOW_Z), (2.3, 2.2, 1.0), METAL, lower)           # elbow plate
         if carry and s == -1:   # kit case hanging from the right hand by its handle
             body, _ = KIT_COLORS[carry]
@@ -517,71 +669,93 @@ def _arms(add, kind, tc, armor, weapon, arms):
             _kit_mark(add, carry, 0.3, y - 1.3, ELBOW_Z - 5.6, "y", lower)
 
 
-def _weapon(add, kind, gun, act, recoil):
-    """Weapon / tool boxes; returns the muzzle (or tool tip) point."""
+def _weapon(W, kind, gun, act, recoil):
+    """Weapon / tool shapes; returns the muzzle (or tool tip) point."""
+    add, cyl, _ = _adders(W)
     r = -recoil
     aim = act == "fire"
+
+    def tilt(deg, x, y, z):
+        return (("pitch", deg, (x, y, z)),)
+
     if gun == "grenade_launcher":            # M32-style revolving grenade launcher at the shoulder
-        z = 13.6 if aim else 12.8
-        add((0.4 + r, -1.6, z - 0.4), (2.6, 1.2, 2.0), GUN)
-        add((3.0 + r, -1.6, z), (3.0, 1.4, 1.6), GUN)
-        add((4.8 + r, -1.6, z - 0.2), (2.6, 2.8, 2.8), OLIVE_D)          # cylinder
-        for dx in (-0.8, 0.8):
-            add((4.8 + dx + r, -1.6, z - 0.2), (0.3, 3.0, 3.0), GUN_L)
-        add((8.2 + r, -1.6, z + 0.2), (4.0, 1.6, 1.6), GUN)               # fat barrel
-        add((10.3 + r, -1.6, z + 0.2), (0.4, 1.9, 1.9), GUN_L)
-        add((7.2 + r, -1.6, z - 1.4), (0.8, 0.8, 1.6), GUN)               # foregrip
-        add((5.8 + r, -1.6, z + 1.8), (1.0, 0.4, 1.0), GUN_L)             # ladder sight
-        return (10.6 + r, -1.6, z + 0.2)
+        z, y = (13.6 if aim else 12.8), -1.6
+        add((0.3 + r, y, z - 0.5), (2.4, 1.0, 1.8), POLY)                                  # stock
+        add((-0.95 + r, y, z - 0.5), (0.3, 1.1, 2.0), (40, 40, 44))                        # butt pad
+        add((2.6 + r, y, z), (2.6, 1.3, 1.5), GUN)                                         # frame
+        cyl((4.8 + r, y, z - 0.2), 1.45, 2.6, "x", OLIVE_D, n=8)                          # revolving drum
+        for k in range(6):
+            ang = math.tau * k / 6
+            add((6.12 + r, y + math.cos(ang) * 0.85, z - 0.2 + math.sin(ang) * 0.85), (0.1, 0.42, 0.42), (30, 30, 34))
+        cyl((8.3 + r, y, z + 0.25), 0.8, 3.6, "x", GUN, n=10)                              # fat barrel
+        cyl((10.2 + r, y, z + 0.25), 0.95, 0.4, "x", GUN_L, n=10)
+        add((7.2 + r, y, z - 1.3), (0.8, 0.8, 1.6), GUN)                                   # foregrip
+        add((3.4 + r, y, z - 1.3), (0.7, 0.8, 1.4), GUN, tilt(12, 3.4 + r, y, z - 0.6))   # pistol grip
+        add((5.8 + r, y, z + 1.65), (1.0, 0.4, 1.0), GUN_L)                                # ladder sight
+        return (10.6 + r, y, z + 0.25)
     if gun == "rifle":                                 # rifle at the ready
-        z = 13.4 if aim else 12.6
-        add((0.6 + r, -1.6, z - 0.4), (3.0, 1.2, 2.2), BROWN)
-        add((4.0 + r, -1.6, z), (5.0, 1.4, 2.0), GUN)
-        add((4.0 + r, -1.6, z + 1.4), (2.6, 1.0, 1.0), GUN_L)
-        add((4.6 + r, -1.6, z - 1.5), (1.2, 1.0, 2.2), GUN)
-        add((9.0 + r, -1.6, z + 0.2), (5.0, 0.8, 0.8), GUN)
-        return (11.5 + r, -1.6, z + 0.2)
+        z, y = (13.4 if aim else 12.6), -1.6
+        add((0.4 + r, y, z - 0.45), (2.6, 1.0, 1.9), POLY)                                 # stock
+        add((-0.95 + r, y, z - 0.45), (0.3, 1.1, 2.1), (36, 36, 40))                       # butt pad
+        add((3.4 + r, y, z), (4.2, 1.2, 1.7), GUN)                                         # receiver
+        add((3.5 + r, y, z + 0.95), (3.6, 0.9, 0.3), GUN_L)                                # top rail
+        cyl((3.5 + r, y, z + 1.55), 0.5, 2.4, "x", (40, 42, 48), n=8)                     # optic
+        add((4.75 + r, y, z + 1.55), (0.12, 0.6, 0.6), CYAN, glow=True)                    # its lens
+        add((4.4 + r, y, z - 1.35), (0.9, 0.85, 1.7), (46, 48, 54), tilt(-14, 4.4 + r, y, z - 0.5))   # magazine
+        add((2.5 + r, y, z - 1.2), (0.7, 0.85, 1.5), GUN, tilt(14, 2.5 + r, y, z - 0.5))  # pistol grip
+        cyl((7.0 + r, y, z + 0.15), 0.62, 3.2, "x", POLY, n=8)                            # handguard
+        cyl((9.6 + r, y, z + 0.15), 0.3, 2.4, "x", GUN, n=8)                              # barrel
+        cyl((10.95 + r, y, z + 0.15), 0.42, 0.5, "x", GUN_L, n=8)                         # flash hider
+        add((8.4 + r, y, z + 0.8), (0.3, 0.3, 0.6), GUN)                                   # front sight
+        return (11.3 + r, y, z + 0.15)
     if gun == "pistol":
-        z = 14.6 if aim else 11.6
+        z, y = (14.6 if aim else 11.6), -3.7
         x = 7.6 if aim else 4.4
-        add((x + r, -3.7, z), (3.0, 1.0, 1.2), GUN)
-        add((x - 1.0 + r, -3.7, z - 0.9), (1.0, 1.0, 1.4), GUN)
-        return (x + 1.6 + r, -3.7, z)
+        add((x + r, y, z), (3.0, 0.9, 1.0), GUN)                                           # slide
+        add((x + 0.2 + r, y, z + 0.55), (2.6, 0.6, 0.15), GUN_L)
+        add((x - 1.0 + r, y, z - 0.95), (1.0, 0.9, 1.5), (46, 48, 54), tilt(12, x - 1.0 + r, y, z - 0.3))
+        return (x + 1.6 + r, y, z)
     if gun == "m60":                                   # machine gun at the hip
-        z = 10.8
-        add((4.6 + r, -2.0, z), (7.0, 2.2, 2.6), GUN)
-        add((0.4 + r, -2.0, z - 0.4), (3.0, 1.6, 2.0), GUN)
-        add((11.6 + r, -2.0, z + 0.2), (7.0, 1.0, 1.0), GUN)
-        add((10.0 + r, -2.0, z + 0.3), (4.0, 1.5, 1.5), GUN_L)
-        add((4.6 + r, -2.0, z + 1.8), (2.0, 0.6, 1.0), GUN_L)
-        for s in (0.5, -0.5):
-            add((13.6 + r, -2.0 + s, z - 1.4), (0.6, 0.6, 2.2), GUN)
-        add((3.4 + r, -3.9, z - 2.6), (3.0, 2.4, 3.0), OLIVE)
-        add((3.6 + r, -3.0, z - 0.8), (1.0, 0.6, 1.8), YELLOW)
-        return (15.2 + r, -2.0, z + 0.2)
+        z, y = 10.8, -2.0
+        add((-0.2 + r, y, z - 0.5), (2.8, 1.4, 2.0), POLY)                                 # butt stock
+        add((4.4 + r, y, z), (6.0, 2.0, 2.4), GUN)                                         # receiver
+        add((4.0 + r, y, z + 1.3), (3.0, 1.8, 0.4), GUN_L)                                 # feed cover
+        add((5.6 + r, y, z + 1.9), (1.6, 0.4, 0.6), GUN)                                   # carry handle
+        cyl((10.6 + r, y, z + 0.2), 0.95, 4.0, "x", GUN_L, n=8)                           # barrel jacket
+        cyl((13.0 + r, y, z + 0.2), 0.42, 3.2, "x", GUN, n=8)                             # barrel
+        cyl((14.7 + r, y, z + 0.2), 0.6, 0.6, "x", GUN_L, n=8)                            # flash hider
+        for s in (0.5, -0.5):                                                               # folded bipod
+            add((12.6 + r, y + s, z - 1.4), (0.4, 0.4, 2.2), GUN, (("roll", s * 30, (12.6 + r, y + s, z - 0.3)),))
+        add((3.0 + r, y - 1.9, z - 2.0), (2.8, 2.2, 2.6), OLIVE)                           # ammo box
+        for k in range(5):                                                                  # belt feeding in
+            add((3.2 + r + k * 0.45, y - 1.0 + k * 0.18, z - 0.6 + k * 0.25), (0.35, 0.6, 0.9),
+                YELLOW if k % 2 else (200, 160, 40))
+        return (15.1 + r, y, z + 0.2)
     if gun == "rocket_launcher":                       # rocket launcher on the shoulder
-        length, th = 16, 3.0
-        z = 16.6
-        front = length - 6 + r
-        add((length / 2 - 6 + r, -3.4, z), (length, th, th), OLIVE)
-        add((-5.6 + r, -3.4, z), (0.8, th + 0.6, th + 0.6), OLIVE_D)     # rear venturi flare
-        add((front - 3, -3.4, z), (0.6, th + 0.2, th + 0.2), OLIVE_D)
-        add((front + 1.2, -3.4, z), (2.4, th - 0.4, th - 0.4), (170, 70, 40))   # warhead
-        add((2.6 + r, -3.4, z - th / 2 - 0.9), (1.0, 1.0, 1.8), GUN)     # grip
-        add((1.0 + r, -3.4 + th / 2 + 0.6, z + 0.6), (2.0, 1.2, 1.6), GUN)   # sight unit
-        return (front + 2.4, -3.4, z)
+        z, y = 16.6, -3.4
+        cyl((2.0 + r, y, z), 1.45, 16, "x", OLIVE, n=10)                                  # launch tube
+        cyl((-5.6 + r, y, z), 1.85, 1.0, "x", OLIVE_D, n=10)                              # rear venturi flare
+        for xx in (-2.0, 6.5):
+            cyl((xx + r, y, z), 1.55, 0.5, "x", OLIVE_D, n=10)                            # tube bands
+        cyl((10.6 + r, y, z), 1.2, 1.4, "x", (170, 70, 40), n=10)                         # warhead
+        cyl((11.6 + r, y, z), 0.7, 0.8, "x", (150, 60, 34), n=8)                          # its nose
+        add((2.6 + r, y, z - 2.3), (1.0, 1.0, 1.8), GUN)                                   # grip
+        add((1.0 + r, y + 2.1, z + 0.6), (2.0, 1.2, 1.6), GUN)                             # sight unit
+        add((1.6 + r, y + 2.75, z + 0.7), (0.12, 0.5, 0.5), CYAN, glow=True)
+        return (12.0 + r, y, z)
     # Medic / engineer: the left hand does the work (injector / wrench).
     if act == "work":
         x, z = 7.4, 14.8
         if kind == "medic":
-            add((x, 3.7, z), (2.4, 0.6, 0.6), METAL_L)
+            cyl((x, 3.7, z), 0.32, 2.4, "x", METAL_L, n=8)
+            add((x + 1.3, 3.7, z), (0.3, 0.12, 0.12), METAL_D)
         else:
             add((x, 3.7, z), (2.4, 0.8, 0.8), METAL_L)
-            add((x + 1.4, 3.7, z), (0.8, 1.6, 1.6), METAL_L)
+            cyl((x + 1.4, 3.7, z), 0.8, 0.8, "y", METAL_L, n=8)
         return (x + 1.4, 3.7, z)
     if kind == "engineer":
         add((0.4, 3.7, 8.4), (0.8, 0.8, 3.6), METAL_L)
-        add((0.4, 3.7, 6.2), (1.6, 0.8, 0.8), METAL_L)
+        cyl((0.4, 3.7, 6.2), 0.8, 0.8, "y", METAL_L, n=8)
     return (1.0, 3.7, 9.0)
 
 
@@ -617,50 +791,73 @@ def _kit_backpack(add, kind, x):
 # Speed slot sets the running gear (Slow = full tracks, Normal = half-tracks, Fast = wheels).
 # Armour slot only adds plating; the footprint stays the same.
 
-def _wheel(add, x, y, z, size, side, phase, steer=0.0, front=False):
-    """A tyre with a hub and tread blocks; the spokes and treads turn with `phase` so it rolls.
-    Steering wheels yaw by `steer` degrees and get a light rim so they stand out."""
+def _wheel(B, x, y, z, size, side, phase, steer=0.0, front=False):
+    """A round tyre on a rim and hub. The wheel nuts and tread grooves turn with `phase`, so it
+    rolls; steering wheels yaw by `steer` degrees and get a bright rim so they stand out."""
     rot = (("yaw", steer, (x, y, z)),) if steer else ()
     w = 3.2 if front else 2.8
-    add((x, y, z), (size, w, size), TYRE, rot)
-    oy = y + side * (w / 2 + 0.05)
-    if front:
-        add((x, oy, z), (size * 0.8, 0.2, size * 0.8), METAL_L, rot)       # rim
-    add((x, oy + side * 0.05, z), (size * 0.55, 0.2, size * 0.55), METAL_D, rot)
-    add((x, oy + side * 0.1, z), (size * 0.3, 0.2, size * 0.3), METAL_L, rot)
-    if phase % 2:
-        add((x, oy + side * 0.15, z), (size * 0.75, 0.15, 0.5), METAL, rot)
-    else:
-        add((x, oy + side * 0.15, z), (0.5, 0.15, size * 0.75), METAL, rot)
-    for k in range(4):   # tread blocks on the rolling face
-        ang = (k * 90 + phase * 30) % 360
-        if 200 < ang < 340:
-            continue
-        rx = math.cos(math.radians(ang)) * size / 2
-        rz = math.sin(math.radians(ang)) * size / 2
-        add((x + rx, y + side * 1.2, z + rz), (0.7, 0.5, 0.7), (60, 60, 64), rot)
+    r = size / 2
+    oy = y + side * w / 2
+    B.append(Cyl((x, y, z), r, w, "y", TYRE, rot, n=16))
+    B.append(Cyl((x, oy + side * 0.06, z), r * 0.72, 0.14, "y", (60, 60, 66), rot, n=14))          # sidewall
+    B.append(Cyl((x, oy + side * 0.13, z), r * 0.54, 0.14, "y", METAL_L if front else METAL, rot, n=12))   # rim
+    B.append(Cyl((x, oy + side * 0.2, z), r * 0.24, 0.14, "y", METAL_D, rot, n=8))                 # hub
+    for k in range(5):   # wheel nuts
+        ang = math.radians(k * 72 + phase * 24)
+        B.append(Box((x + math.cos(ang) * r * 0.38, oy + side * 0.22, z + math.sin(ang) * r * 0.38),
+                     (0.4, 0.12, 0.4), GUN, rot))
+    for k in range(10):  # tread grooves across the rolling face
+        ang = math.radians(k * 36 + phase * 12)
+        px, pz = x + math.cos(ang) * (r + 0.03), z + math.sin(ang) * (r + 0.03)
+        B.append(Box((px, y, pz), (0.32, w * 0.84, 0.12), (22, 22, 26),
+                     (("pitch", math.degrees(ang) + 90, (px, y, pz)),) + rot))
 
 
-def _track(add, x0, x1, y, z, h, w, side, phase):
-    """A track run from x0 to x1: crawling tread bars, road wheels, sprocket and idler."""
+def _stadium_at(dist, half, r):
+    """Point (x, z) and tangent angle (degrees) at distance `dist` round a rounded track run:
+    forward along the bottom, up round the front, back along the top, down round the rear."""
+    straight, arc = 2 * half, math.pi * r
+    dist %= 2 * straight + 2 * arc
+    if dist < straight:
+        return -half + dist, -r, 0.0
+    dist -= straight
+    if dist < arc:
+        ang = -math.pi / 2 + dist / r
+        return half + r * math.cos(ang), r * math.sin(ang), math.degrees(ang) + 90
+    dist -= arc
+    if dist < straight:
+        return half - dist, r, 180.0
+    dist -= straight
+    ang = math.pi / 2 + dist / r
+    return -half + r * math.cos(ang), r * math.sin(ang), math.degrees(ang) + 90
+
+
+def _track(B, x0, x1, y, z, h, w, side, phase):
+    """A track run from x0 to x1 with rounded ends: links that crawl round as it moves, round
+    road wheels, drive sprocket and idler."""
     length = x1 - x0
-    add(((x0 + x1) / 2, y, z), (length, w, h), TRACK)
-    add(((x0 + x1) / 2, y, z + h / 2 - 0.3), (length - 1.0, w + 0.1, 0.4), TRACK_L)
-    n = max(3, int(length / 3.0))
-    step = length / n
+    cx = (x0 + x1) / 2
+    r = h / 2
+    half = length / 2 - r
+    B.append(Ext((cx, y, z), stadium(length, r, 6), "y", -w / 2, w / 2, TRACK))
+    per = 4 * half + 2 * math.pi * r
+    n = max(8, int(per / 1.6))
+    step = per / n
     for k in range(n):
-        x = x0 + 0.6 + ((k * step + phase * step / 3) % (length - 1.2))
-        add((x, y + side * (w / 2 + 0.05), z - h / 2 + 0.6), (1.0, 0.2, 0.8), TRACK_L)
-    wheels = max(2, int((length - 4) / 5.5))
-    for k in range(wheels):
-        x = x0 + 2.4 + k * (length - 4.8) / max(1, wheels - 1)
-        add((x, y + side * (w / 2 + 0.1), z - 0.4), (2.6, 0.2, 2.6), METAL_D)
-        add((x, y + side * (w / 2 + 0.2), z - 0.4), (1.0, 0.2, 1.0), METAL)
-    for x in (x0 + 1.4, x1 - 1.4):
-        add((x, y + side * (w / 2 + 0.15), z + 0.6), (2.2, 0.2, 2.2), GUN_L)
+        px, pz, ang = _stadium_at(k * step + phase * step / 3, half, r + 0.1)
+        B.append(Box((cx + px, y, z + pz), (step * 0.5, w + 0.14, 0.32), TRACK_L, (("pitch", ang, (cx + px, y, z + pz)),)))
+    oy = y + side * (w / 2 + 0.1)
+    wheels = max(2, int((length - 2 * r) / 4.6) + 1)
+    for k in range(wheels):   # road wheels along the bottom run
+        x = x0 + r + 0.3 + k * (length - 2 * r - 0.6) / max(1, wheels - 1)
+        B.append(Cyl((x, oy, z - r * 0.28), r * 0.62, 0.3, "y", METAL_D, n=12))
+        B.append(Cyl((x, oy + side * 0.16, z - r * 0.28), r * 0.26, 0.16, "y", METAL, n=8))
+    for x in (x1 - r, x0 + r):   # drive sprocket (front) and idler (rear)
+        B.append(Cyl((x, oy, z), r * 0.78, 0.3, "y", GUN_L, n=12))
+        B.append(Cyl((x, oy + side * 0.16, z), r * 0.3, 0.16, "y", METAL_D, n=8))
 
 
-def _running_gear(add, speed, phase, front, rear, y, z, h, wheel, wreck=False, steer=0.0, fender=None):
+def _running_gear(B, speed, phase, front, rear, y, z, h, wheel, wreck=False, steer=0.0, fender=None):
     """Wheels, half-tracks or full tracks between x=rear and x=front on both sides.
     Front wheels steer by `steer` degrees; `fender` colours the mudguards over them."""
     for s in (1, -1):
@@ -671,18 +868,24 @@ def _running_gear(add, speed, phase, front, rear, y, z, h, wheel, wreck=False, s
             for k in range(count):
                 x = front - wheel / 2 - k * (span - wheel) / (count - 1)
                 if not (wreck and k == 0):
-                    _wheel(add, x, yy, wheel / 2, wheel, s, phase, steer if k == 0 else 0.0, k == 0)
+                    _wheel(B, x, yy, wheel / 2, wheel, s, phase, steer if k == 0 else 0.0, k == 0)
         elif speed == 1:                    # half-track: big steering wheels up front, tracks behind
             fw = wheel * 1.15
             fx = front - fw / 2
             if not wreck:
-                _wheel(add, fx, yy, fw / 2, fw, s, phase, steer, True)
-            if fender:
-                add((fx, yy, fw + 0.3), (fw + 1.2, 3.6, 0.5), fender)
-                add((fx + fw / 2 + 0.5, yy, fw - 0.6), (0.5, 3.6, 1.6), fender)
-            _track(add, rear, front - fw - 1.0, yy, z, h, 2.8, s, phase)
+                _wheel(B, fx, yy, fw / 2, fw, s, phase, steer, True)
+            if fender:   # a curved mudguard over the front wheel
+                arc = [(math.cos(math.pi * i / 6) * (fw / 2 + 0.9), math.sin(math.pi * i / 6) * (fw / 2 + 0.9))
+                       for i in range(7)]
+                for i in range(6):
+                    (u0, v0), (u1, v1) = arc[i], arc[i + 1]
+                    mx, mz = fx + (u0 + u1) / 2, fw / 2 + (v0 + v1) / 2
+                    seg = math.hypot(u1 - u0, v1 - v0)
+                    ang = math.degrees(math.atan2(v1 - v0, u1 - u0))
+                    B.append(Box((mx, yy, mz), (seg + 0.2, 3.6, 0.45), fender, (("pitch", ang, (mx, yy, mz)),)))
+            _track(B, rear, front - fw - 1.0, yy, z, h, 2.8, s, phase)
         else:                               # full tracks
-            _track(add, rear, front, yy, z, h, 3.2, s, phase)
+            _track(B, rear, front, yy, z, h, 3.2, s, phase)
 
 
 def tank(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False, turret=0.0, steer=0.0,
@@ -704,7 +907,7 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_ex
     hull = blend(tc["Td"], OLIVE, 0.35)
     hull_l = shade(hull, 1.12)
 
-    _running_gear(add, speed, phase, 15.5, -15.5, 7.2, 3.0, 6.0, 6.4, wreck, steer, shade(hull, 0.9))
+    _running_gear(B, speed, phase, 15.5, -15.5, 7.2, 3.0, 6.0, 6.4, wreck, steer, shade(hull, 0.9))
     gear = len(B)
     add((0, 0, 7.4), (27, 11, 4), hull)
     add((14.2, 0, 8.4), (4.0, 11, 3.0), hull, (("pitch", -30, (14.2, 0, 8.4)),))
@@ -748,6 +951,7 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_ex
     if wreck:
         tr.append(("roll", 8, (-1, 0, 12)))
     tadd = lambda pos, size, col, rot=(), glow=False: B.append(Box(pos, size, col, tuple(rot) + tuple(tr), glow))
+    tcyl = lambda pos, r, length, col, rot=(), n=10: B.append(Cyl(pos, r, length, "x", col, tuple(rot) + tuple(tr), n=n))
     T = tc["T"]
     tadd((-1, 0, 13.0), (12, 10, 3.6), T)
     tadd((-1.4, 0, 15.2), (9.6, 8, 0.8), T)
@@ -782,27 +986,29 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_ex
     if gun == "bushmaster":     # Bushmaster II 30mm: slim barrel, muzzle brake, ammo feed box, coax
         tadd((6.8, 0, gz), (1.6, 2.6, 2.2), GUN_L)
         length, th = 11, 0.9
-        tadd((7.4 + length / 2 + r, 0, gz), (length, th, th), GUN, bar)
-        tadd((7.4 + length + 0.5 + r, 0, gz), (1.0, 1.4, 1.4), GUN, bar)
+        tcyl((7.4 + length / 2 + r, 0, gz), th / 2, length, GUN, bar)
+        tcyl((7.4 + length + 0.5 + r, 0, gz), 0.7, 1.0, GUN, bar)
+        for k in range(3):   # muzzle brake ports
+            tadd((7.4 + length + 0.2 + k * 0.3 + r, 0, gz + 0.72), (0.12, 0.8, 0.1), (24, 24, 28), bar)
         tadd((4.0, -3.7, gz), (2.4, 1.4, 1.8), GUN)
         tadd((8.0, 1.8, gz - 1.0), (4.0, 0.7, 0.7), GUN)
         muzzle_x = 7.4 + length + 1.0
     elif gun == "cannon_120":   # 120mm smoothbore: thick barrel, fume extractor, thermal sleeve bands
         tadd((6.8, 0, gz), (1.8, 4.0, 3.0), GUN_L)
         length, th = 13, 2.0
-        tadd((7.4 + length / 2 + r, 0, gz), (length, th, th), GUN, bar)
-        tadd((7.4 + length / 2 + r, 0, gz + th / 2), (length - 0.6, th * 0.5, 0.15), GUN_L, bar)
-        tadd((7.4 + length * 0.45 + r, 0, gz), (2.6, th + 0.9, th + 0.9), GUN, bar)
+        tcyl((7.4 + length / 2 + r, 0, gz), th / 2, length, GUN, bar, n=12)
+        tadd((7.4 + length / 2 + r, 0, gz + th / 2), (length - 0.6, th * 0.4, 0.15), GUN_L, bar)
+        tcyl((7.4 + length * 0.45 + r, 0, gz), (th + 0.9) / 2, 2.6, GUN, bar, n=12)
         for k in (0.25, 0.7, 0.85):
-            tadd((7.4 + length * k + r, 0, gz), (0.4, th + 0.3, th + 0.3), GUN_L, bar)
+            tcyl((7.4 + length * k + r, 0, gz), (th + 0.3) / 2, 0.4, GUN_L, bar, n=12)
         muzzle_x = 7.4 + length
     else:               # 155mm artillery: long raised barrel, double-baffle brake, recuperators, bustle
         tadd((6.8, 0, gz), (2.2, 4.8, 3.4), GUN_L)
         length, th = 19, 2.8
-        tadd((7.4 + length / 2 + r, 0, gz), (length, th, th), GUN, bar)
-        tadd((7.4 + length * 0.35 + r, 0, gz), (3.0, th + 1.0, th + 1.0), GUN, bar)
+        tcyl((7.4 + length / 2 + r, 0, gz), th / 2, length, GUN, bar, n=12)
+        tcyl((7.4 + length * 0.35 + r, 0, gz), (th + 1.0) / 2, 3.0, GUN, bar, n=12)
         for s in (0.9, -0.9):
-            tadd((9.6 + r, s, gz + th / 2 + 0.5), (5.0, 0.8, 0.8), GUN_L, bar)
+            tcyl((9.6 + r, s, gz + th / 2 + 0.5), 0.42, 5.0, GUN_L, bar, n=8)
         for dx in (0.6, 2.2):
             tadd((7.4 + length + dx + r, 0, gz), (1.0, th + 2.2, th + 1.0), GUN, bar)
         tadd((-9.4, 0, 13.4), (4.4, 8.6, 3.6), T)                       # turret bustle
@@ -840,7 +1046,7 @@ def _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     B = []
     add = lambda *a, **k: B.append(Box(*a, **k))
     body = tc["T"]
-    _running_gear(add, speed, phase, 11.0, -11.0, 6.0, 2.4, 4.6, 5.2, wreck, steer, shade(body, 0.8))
+    _running_gear(B, speed, phase, 11.0, -11.0, 6.0, 2.4, 4.6, 5.2, wreck, steer, shade(body, 0.8))
     gear = len(B)
     add((0, 0, 5.6), (24, 9.4, 3), shade(body, 0.75))
     if armor == 0:
@@ -895,12 +1101,14 @@ def _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     add((-4.8, 0, 12.0), (0.8, 0.8, 3.0), GUN)                        # pintle post
     add((-10.6, 3.6, 13.6), (0.3, 0.3, 6.0), GUN)                     # radio antenna
     if speed != 0:
-        add((-12.2, 0, 7.6), (1.0, 4.4, 4.4), TYRE)                   # spare wheel
-        add((-12.75, 0, 7.6), (0.2, 2.0, 2.0), METAL_D)
+        B.append(Cyl((-12.2, 0, 7.6), 2.2, 1.0, "x", TYRE, n=14))     # spare wheel
+        B.append(Cyl((-12.75, 0, 7.6), 1.1, 0.14, "x", METAL, n=12))
+        B.append(Cyl((-12.82, 0, 7.6), 0.45, 0.14, "x", METAL_D, n=8))
 
     # Weapon station: gunner + weapon swivel together on the pintle.
     yaw = ("yaw", turret, JEEP_PIVOT)
     wadd = lambda pos, size, col, glow=False: B.append(Box(pos, size, col, (yaw,), glow))
+    wcyl = lambda pos, r, length, col, n=10: B.append(Cyl(pos, r, length, "x", col, (yaw,), n=n))
     wadd((-7.5, 0, 11.6), (2.6, 4.0, 3.6), body)
     wadd((-7.5, 0, 14.6), (2.4, 2.4, 2.4), SKIN)
     wadd((-7.5, 0, 15.9), (2.8, 2.8, 1.4), tc["Td"])
@@ -910,10 +1118,10 @@ def _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     z = 14.8
     if gun == "m2":         # M2 Browning: boxy receiver, perforated barrel jacket, spade grips
         wadd((-3.6 + r, 0, z), (3.6, 1.8, 2.0), GUN)
-        wadd((0.8 + r, 0, z + 0.2), (5.0, 1.1, 1.1), GUN_L)
+        wcyl((0.8 + r, 0, z + 0.2), 0.58, 5.0, GUN_L)                    # perforated barrel jacket
         for k in range(4):
             wadd((-0.8 + k * 1.2 + r, 0, z + 0.78), (0.4, 0.6, 0.1), GUN)
-        wadd((4.0 + r, 0, z + 0.2), (1.6, 0.7, 0.7), GUN)
+        wcyl((4.0 + r, 0, z + 0.2), 0.36, 1.6, GUN)
         for s in (0.6, -0.6):
             wadd((-5.7 + r, s, z), (0.6, 0.5, 1.2), GUN)
         wadd((-3.6 + r, -1.7, z - 0.4), (1.6, 1.2, 1.4), OLIVE)
@@ -921,8 +1129,8 @@ def _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
     elif gun == "uag40":    # UAG-40 automatic grenade launcher: chunky receiver, short fat barrel, big ammo box
         wadd((-3.4 + r, 0, z), (4.4, 2.4, 2.4), GUN)
         wadd((-3.4 + r, 0, z + 1.3), (3.6, 1.6, 0.3), GUN_L)
-        wadd((0.6 + r, 0, z + 0.2), (2.8, 1.5, 1.5), GUN)
-        wadd((2.2 + r, 0, z + 0.2), (0.6, 1.8, 1.8), GUN_L)
+        wcyl((0.6 + r, 0, z + 0.2), 0.78, 2.8, GUN)
+        wcyl((2.2 + r, 0, z + 0.2), 0.92, 0.6, GUN_L)
         wadd((-3.4 + r, -2.6, z - 0.6), (2.6, 2.6, 2.2), OLIVE)
         wadd((-3.4 + r, -1.4, z + 0.2), (1.0, 0.8, 0.6), YELLOW)       # linked grenades feeding in
         muzzle = (2.6 + r, 0, z + 0.2)
@@ -930,9 +1138,9 @@ def _jeep(light, lo, phase, recoil, flash, moving, wreck, turret, steer):
         wadd((-3.4, 0, z - 0.6), (2.0, 1.8, 1.8), GUN)
         wadd((-2.35, 0, z - 0.4), (0.1, 0.8, 0.6), CYAN, glow=True)
         for s in (1.0, -1.0):
-            wadd((-1.0 + r, s, z + 0.9), (8.0, 1.5, 1.5), OLIVE)
-            wadd((3.1 + r, s, z + 0.9), (0.4, 1.7, 1.7), GUN)
-            wadd((-5.1 + r, s, z + 0.9), (0.4, 1.7, 1.7), GUN)
+            B.append(Cyl((-1.0 + r, s, z + 0.9), 0.78, 8.0, "x", OLIVE, (yaw,), n=10))
+            B.append(Cyl((3.1 + r, s, z + 0.9), 0.88, 0.4, "x", GUN, (yaw,), n=10))
+            B.append(Cyl((-5.1 + r, s, z + 0.9), 0.88, 0.4, "x", GUN, (yaw,), n=10))
         muzzle = (3.4 + r, 1.0, z + 0.9)
     muzzle = _rotate(muzzle, *yaw)
     if speed == 0:
@@ -971,6 +1179,31 @@ def _bbox(B, east, south, up, w, d, h, col, glow=False, rot=()):
     B.append(Box((south * DEPTH, east, (up + h / 2) * HEIGHT), (d * DEPTH, w, h * HEIGHT), col, rot, glow))
 
 
+GROOVE = (40, 42, 50)   # dark detail lines: panel seams, corrugation grooves, joints
+
+
+def _barch(B, south, depth, half_w, base, rise, col, n=18):
+    """An arched (half-ellipse) roof running north-south: `half_w` either side of the centre line,
+    springing from height `base` and rising `rise` (design units), `depth` long, centred on `south`.
+    Returns the arch's (east, up) outline points for adding trim and grooves."""
+    arc = [(half_w * math.cos(math.pi * i / n), base + rise * math.sin(math.pi * i / n)) for i in range(n + 1)]
+    profile = [(e, u * HEIGHT) for e, u in arc]
+    B.append(Ext((south * DEPTH, 0, 0), profile, "x", -depth / 2 * DEPTH, depth / 2 * DEPTH, col))
+    return arc
+
+
+def _barc_line(B, arc, south, col, thick=0.45, out=0.12):
+    """A thin strip following an arch outline across the roof at `south` (a seam or trim)."""
+    for (e0, u0), (e1, u1) in zip(arc, arc[1:]):
+        y0, z0, y1, z1 = e0, u0 * HEIGHT, e1, u1 * HEIGHT
+        my, mz = (y0 + y1) / 2, (z0 + z1) / 2
+        ln = math.hypot(y1 - y0, z1 - z0)
+        ny, nz = (mz and my / max(1e-6, math.hypot(my, mz))), 0
+        ang = math.degrees(math.atan2(z1 - z0, y1 - y0))
+        B.append(Box((south * DEPTH, my, mz + out), (thick, ln + 0.1, thick), col,
+                     (("roll", ang, (south * DEPTH, my, mz + out)),)))
+
+
 def command_center(light):
     tc = team_set(light)
     T = tc["T"]
@@ -987,7 +1220,14 @@ def command_center(light):
         b(s * 21, 6, 10, 6.4, 12.4, 0.8, METAL_L)
     for x in (-13, -6, 6, 13):
         b(x, 13.1, 12.4, 4, 0.3, 1.6, CYAN, glow=True)        # windows
+        b(x, 13.0, 11.9, 4.8, 0.2, 2.6, GROOVE)               # window frames
+    for x in (-16, -9.5, -3, 3, 9.5, 16):
+        b(x, 13.05, 2.4, 0.3, 0.2, 6.6, GROOVE)               # wall panel seams (below the band)
+    b(0, 13.05, 15.4, 38, 0.2, 0.3, GROOVE)                   # roof line
     b(0, 13.0, 2, 12, 0.6, 8, (46, 50, 58))                  # main door
+    b(0, 13.35, 2, 0.3, 0.2, 8, GROOVE)                       # door split
+    for k in range(4):
+        b(0, 13.35, 3.0 + k * 1.8, 12, 0.2, 0.2, (36, 38, 44))   # door ribs
     for k in range(6):
         b(-5 + k * 2, 13.2, 10, 1, 0.4, 1.2, YELLOW if k % 2 == 0 else (30, 30, 34))
     # Rooftop: command dome (stacked), radar dish, mast with beacon, vents.
@@ -1017,6 +1257,10 @@ def barracks(light):
     for x in (-10, 6):                                          # weathering streaks on the walls
         b(x, 12.15, 3, 1.0, 0.3, 6, shade(CONCRETE, 0.85))
     b(0, -4, 1.5, 42, 32, 9, CONCRETE)                       # bunker walls
+    for z in (3.6, 5.6, 8.0):
+        b(0, 12.08, z, 42, 0.2, 0.25, shade(CONCRETE, 0.7))   # pour lines
+    for x in (-21, 21):
+        b(x, 12.08, 1.5, 0.35, 0.2, 9, shade(CONCRETE, 0.7))  # corners
     b(0, -4, 10.5, 38, 28, 3, shade(CONCRETE, 0.95))          # stepped roof
     b(0, -4, 13.5, 32, 22, 1.2, shade(CONCRETE, 1.08))
     b(0, 12.1, 6, 42, 0.3, 2.0, T)                            # team stripe
@@ -1041,22 +1285,37 @@ def vehicle_yard(light):
     b = lambda *a, **k: _bbox(B, *a, **k)
     b(0, 0, 0, 46, 46, 1.2, CONCRETE)
     b(0, 18, 1.2, 40, 8, 0.2, CONCRETE_D)                     # apron
+    for x in range(-18, 19, 6):                                # its expansion joints
+        b(x, 18, 1.4, 0.3, 8, 0.05, shade(CONCRETE_D, 0.8))
     b(0, -6, 1.2, 44, 30, 12, METAL)                          # hangar walls
-    for k, (w, hgt) in enumerate(((44, 3), (40, 3), (32, 2.6), (20, 2))):   # arched roof
-        b(0, -6, 13.2 + k * 2.9, w, 30, hgt, shade(METAL_L, 1.0 - 0.04 * k))
-    for x in range(-18, 20, 6):
-        b(x, -6, 13.2, 0.4, 30.2, 0.4, METAL_D)               # roof ribs
+    for x in list(range(-21, -15, 2)) + list(range(17, 22, 2)):
+        b(x, 9.05, 1.4, 0.3, 0.2, 7.8, GROOVE)                # corrugated cladding either side of the door
     b(0, 9.1, 9.5, 44, 0.3, 2.2, T)                           # team band
+    # Arched roof of corrugated sheet: grooves run front to back, seams across every few metres.
+    arc = _barch(B, -6, 30, 22, 13.2, 10.5, METAL_L)
+    for i in range(1, 36):
+        t = math.pi * i / 36
+        e, u = 22.1 * math.cos(t), 13.2 + 10.6 * math.sin(t)
+        B.append(Box((-6 * DEPTH, e, u * HEIGHT), (30 * DEPTH, 0.28, 0.28), GROOVE if i % 3 else shade(METAL, 0.8)))
+    for south in (-14, -6):
+        _barc_line(B, [(e * 1.005, u + 0.05) for e, u in arc], south, GROOVE, 0.3)
+    _barc_line(B, [(e * 1.01, u + 0.1) for e, u in arc], 8.85, T, 0.8)          # team trim on the front edge
+    b(0, -6, 13.0, 44.6, 30.4, 0.6, shade(METAL, 0.8))                         # eaves
     b(0, 9.0, 1.2, 30, 0.6, 9, (66, 70, 80))                  # big door
-    for k in range(4):
-        b(0, 9.3, 2.5 + k * 2, 30, 0.2, 0.3, (52, 56, 64))
+    for k in range(9):
+        b(0, 9.32, 2.2 + k * 0.95, 30, 0.2, 0.25, (46, 50, 58))   # roller door slats
     for k in range(8):
         b(-14 + k * 4, 9.4, 10.2, 4, 0.3, 1.0, YELLOW if k % 2 == 0 else (30, 30, 34))
     for s in (1, -1):
         b(s * 17, 9.4, 6, 1.2, 0.3, 1.2, (255, 170, 60), glow=True)
-    # Crane: mast, jib and hook.
+        b(s * 15.6, 9.3, 1.2, 0.6, 0.3, 9, GROOVE)            # door frame
+    # Crane: lattice mast, jib and hook.
     b(-19, -18, 13.2, 1.4, 1.4, 14, YELLOW)
+    for k in range(5):
+        b(-19, -17.25, 14.5 + k * 2.6, 1.4, 0.2, 0.25, shade(YELLOW, 0.6))
     b(-12, -18, 26.4, 16, 1.2, 1.2, YELLOW)
+    for k in range(6):
+        b(-17 + k * 2.6, -17.35, 26.5, 0.25, 0.2, 1.0, shade(YELLOW, 0.6))
     b(-5, -18, 21, 0.3, 0.3, 5, GUN)
     b(-5, -18, 20, 1.2, 1.2, 1.0, GUN)
     return B
@@ -1185,20 +1444,28 @@ BUILDING_MODELS = {"command": command_center, "barracks": barracks, "yard": vehi
 
 def under_construction(boxes, progress):
     """The building cut off at `progress` of its height, wrapped in yellow scaffolding."""
-    top = max(b.pos[2] + b.size[2] / 2 for b in boxes)
+    def zrange(b):
+        if isinstance(b, Box):
+            return b.pos[2] - b.size[2] / 2, b.pos[2] + b.size[2] / 2
+        zs = [p[2] for p in b.geometry()[0]]
+        return min(zs), max(zs)
+
+    top = max(zrange(b)[1] for b in boxes)
     cut = max(1.5, top * progress)
     out = []
     for b in boxes:
-        z0 = b.pos[2] - b.size[2] / 2
-        z1 = b.pos[2] + b.size[2] / 2
+        z0, z1 = zrange(b)
         if z0 >= cut:
             continue
         if z1 > cut:
+            if not isinstance(b, Box):
+                continue   # round parts (domes, arches) go on once their level is reached
             h = cut - z0
             b = Box((b.pos[0], b.pos[1], z0 + h / 2), (b.size[0], b.size[1], h), b.color, b.rot, b.glow)
         out.append(b)
-    hx = max(abs(b.pos[0]) + b.size[0] / 2 for b in boxes if b.pos[2] < 3) - 2
-    hy = max(abs(b.pos[1]) + b.size[1] / 2 for b in boxes if b.pos[2] < 3) - 2
+    ground = [b for b in boxes if isinstance(b, Box) and b.pos[2] < 3]
+    hx = max(abs(b.pos[0]) + b.size[0] / 2 for b in ground) - 2
+    hy = max(abs(b.pos[1]) + b.size[1] / 2 for b in ground) - 2
     pole = (176, 140, 60)
     for sx in (1, -1):
         for sy in (1, -1):

@@ -6,7 +6,7 @@ normal. Cliff faces themselves are visible from below.
 """
 import pygame
 
-from .config import TILE, PLAYER
+from .config import PLAYER
 from .world import CLIFF, HIGH
 
 _circles = {}
@@ -51,7 +51,8 @@ class Fog:
         self.visible = bytearray(self.w * self.h)
         self.explored = bytearray(self.w * self.h)
         self.small = None    # one pixel per tile, used by the minimap
-        self.surface = None  # full map size, used by the main view
+        self.mid = None      # one pixel per quarter tile; the view enlarges the part on screen
+        self.version = 0     # bumped on every redraw, so the view knows when to re-enlarge
         self.reveal_all = False
 
     def update(self, game):
@@ -59,7 +60,7 @@ class Fog:
         if self.reveal_all:
             self.visible = bytearray(b"\x01" * (w * h))
             self.explored = bytearray(b"\x01" * (w * h))
-            if self.surface is None:
+            if self.mid is None:
                 self._redraw()
             return
         vis = vision(game, PLAYER)
@@ -72,6 +73,6 @@ class Fog:
         buf = bytearray(w * h * 4)
         buf[3::4] = bytes(0 if v else (120 if e else 255) for v, e in zip(self.visible, self.explored))
         self.small = pygame.image.frombuffer(bytes(buf), (w, h), "RGBA").copy()
-        # Soften to quarter-tile steps, then blow up with hard pixels for a chunky edge.
-        mid = pygame.transform.smoothscale(self.small, (w * 4, h * 4))
-        self.surface = pygame.transform.scale(mid, (w * TILE, h * TILE))
+        # Soften to quarter-tile steps; the view blows these up with hard pixels for a chunky edge.
+        self.mid = pygame.transform.smoothscale(self.small, (w * 4, h * 4))
+        self.version += 1

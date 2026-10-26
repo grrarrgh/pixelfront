@@ -3,7 +3,7 @@ import logging
 
 import pygame
 
-from .config import VIEW_W, VIEW_H, TOPBAR_H, PLAYER, TEAM_COLORS
+from .config import VIEW_W, VIEW_H, TOPBAR_H, PLAYER, TEAM_COLORS, RES
 from .units import UNITS
 from .font import draw_text, text_width
 from .modules import (slots_for, slot_label, tiers, compute_stats, base_stats, loadout_cost,
@@ -37,30 +37,31 @@ class DesignScreen:
         self.kinds = list(building.stats["trains"])
         self.hover = None  # (kind, slot, level)
         self.backdrops = {}
+        pw, ph = PREVIEW_W * RES, PREVIEW_H * RES       # the preview, in screen pixels
         for scale in (1, 2):
-            # Sample the map just below the building, at the same zoom as the unit preview.
-            w, h = PREVIEW_W // scale, PREVIEW_H // scale
-            x = min(max(0, int(building.x) - w // 2), terrain.get_width() - w)
-            y = min(max(0, int(building.rect()[3]) + 4), terrain.get_height() - h)
+            # Sample the map just below the building (terrain is at screen resolution), at the
+            # same zoom as the unit preview.
+            w, h = pw // scale, ph // scale
+            x = min(max(0, int(building.x * RES) - w // 2), terrain.get_width() - w)
+            y = min(max(0, int((building.rect()[3] + 4) * RES)), terrain.get_height() - h)
             patch = terrain.subsurface((x, y, w, h))
-            self.backdrops[scale] = pygame.transform.scale(patch, (PREVIEW_W, PREVIEW_H))
+            self.backdrops[scale] = pygame.transform.scale(patch, (pw, ph))
 
     def draw_preview(self, surf, kind, lo, y):
-        """The unit at a modest zoom, standing on the actual map terrain."""
+        """The unit at a modest zoom, standing on the actual map terrain (at full resolution)."""
         infantry = UNITS[kind]["cls"] == "infantry"
         scale = 2 if infantry else 1
         box = pygame.Rect(PANEL.x + 6, y, PREVIEW_W, PREVIEW_H)
-        surf.blit(self.backdrops[scale], box)
+        pv = self.backdrops[scale].copy()
         img, (ox, oy) = self.sp.unit(kind, PLAYER, lo).frame("idle", 0, 30)
         img = pygame.transform.scale(img, (img.get_width() * scale, img.get_height() * scale))
-        gx, gy = box.centerx, box.bottom - 10
-        shadow = pygame.Surface((UNITS[kind]["radius"] * 2 * scale + 4, 5 * scale), pygame.SRCALPHA)
+        gx, gy = pv.get_width() // 2, pv.get_height() - 10 * RES
+        k = scale * RES
+        shadow = pygame.Surface((UNITS[kind]["radius"] * 2 * k + 4 * RES, 5 * k), pygame.SRCALPHA)
         pygame.draw.ellipse(shadow, (60, 30, 10, 80), shadow.get_rect())
-        surf.blit(shadow, shadow.get_rect(center=(gx, gy + scale)))
-        clip = surf.get_clip()
-        surf.set_clip(box)
-        surf.blit(img, (gx - ox * scale, gy - oy * scale))
-        surf.set_clip(clip)
+        pv.blit(shadow, shadow.get_rect(center=(gx, gy + k)))
+        pv.blit(img, (gx - ox * scale, gy - oy * scale))
+        self.layer.image(pv, box.x, box.y)
         pygame.draw.rect(surf, (110, 100, 122), box, 1)
 
     @property
@@ -102,7 +103,9 @@ class DesignScreen:
             return "close"
         return None
 
-    def draw(self, surf):
+    def draw(self, layer):
+        self.layer = layer
+        surf = layer.touch()
         light, dark = TEAM_COLORS[PLAYER]
         shade = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
         shade.fill((0, 0, 0, 90))

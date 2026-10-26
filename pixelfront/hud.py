@@ -1,13 +1,16 @@
-"""Bottom control panel, sidebar build menu, top resource bar, minimap and tooltips."""
+"""Bottom control panel, sidebar build menu, top resource bar, minimap and tooltips.
+
+Drawn on the 640x360 UI layer (see layer.py); unit and building pictures inside it are queued
+as full-resolution images so they keep their detail."""
 import pygame
 
 from .config import (SCREEN_W, SCREEN_H, VIEW_W, VIEW_H, HUD_H, TOPBAR_H, TILE, PLAYER, ENEMY, NEUTRAL,
-                     MAX_CAPTURERS, POINT_INCOME, SIDEBAR_W, QUEUE_MAX)
+                     MAX_CAPTURERS, POINT_INCOME, SIDEBAR_W, QUEUE_MAX, RES)
 from .units import UNITS
 from .font import draw_text, text_width
 from .modules import loadout_summary, format_stat, armor_rank_info
 from .render import hp_bar, team_color
-from .sprites import K, GOLD, render_minimap, fit
+from .sprites import K, GOLD, render_minimap
 
 PANEL = (46, 42, 50)
 PANEL_L = (112, 104, 120)
@@ -113,22 +116,32 @@ class HUD:
 
     # ---- drawing ------------------------------------------------------------
 
-    def draw(self, surf, ctrl):
+    def draw(self, layer, ctrl):
+        self.layer = layer
+        surf = layer.touch()
         items = ctrl.build_menu()
         self.draw_sidebar(surf, ctrl, items)
         self.draw_topbar(surf)
         surf.blit(self.panel, (0, VIEW_H))
         self.draw_minimap(surf, ctrl)
         self.draw_info(surf, ctrl)
+        self.draw_card(surf, ctrl, ctrl.commands())
+
+    def draw_overlays(self, layer, ctrl):
+        """Tooltips, on the layer above the HUD's detailed pictures."""
         cmds = ctrl.commands()
-        self.draw_card(surf, ctrl, cmds)
         i = self.button_at(ctrl.mouse, len(cmds))
         if i is not None:
-            self.draw_tooltip(surf, cmds[i], (SCREEN_W - 4, VIEW_H - 2), above=True)
+            self.draw_tooltip(layer.touch(), cmds[i], (SCREEN_W - 4, VIEW_H - 2), above=True)
+        items = ctrl.build_menu()
         i = self.menu_item_at(ctrl.mouse, len(items))
         if i is not None:
             r = self.menu_rects(len(items))[i]
-            self.draw_tooltip(surf, items[i], (SB_X - 3, r.y), above=False)
+            self.draw_tooltip(layer.touch(), items[i], (SB_X - 3, r.y), above=False)
+
+    def picture(self, img, cx, cy, clip=None):
+        """A full-resolution picture centred on UI point (cx, cy)."""
+        self.layer.image_center(img, cx, cy, clip)
 
     def draw_sidebar(self, surf, ctrl, items):
         g = self.game
@@ -138,15 +151,10 @@ class HUD:
         r = self.portrait_rect
         has_cc = any(b.team == PLAYER and b.kind == "command" for b in g.buildings)
         bevel(surf, r, raised=not r.collidepoint(mouse), fill=(176, 146, 98))
-        img = self.sp.building_portrait("command", PLAYER, r.w - 10)
-        clip = surf.get_clip()
-        surf.set_clip(r.inflate(-2, -2))
-        surf.blit(img, img.get_rect(center=(r.centerx, r.centery + 2)))
-        surf.set_clip(clip)
+        img = self.sp.building_portrait("command", PLAYER, (r.w - 10) * RES)
+        self.picture(img, r.centerx, r.centery + 2, clip=r.inflate(-2, -2))
         if not has_cc:
-            dim = pygame.Surface((r.w - 2, r.h - 2), pygame.SRCALPHA)
-            dim.fill((0, 0, 0, 150))
-            surf.blit(dim, (r.x + 1, r.y + 1))
+            self.layer.fill(r.inflate(-2, -2), (0, 0, 0, 150))
         # Menu title: the selected factory, or the Command Center by default.
         title = ctrl.menu_title()
         draw_text(surf, self.clip_text(title, SIDEBAR_W - 8), SB_X + 4, r.bottom + 4, YELLOW)
@@ -157,10 +165,10 @@ class HUD:
             bevel(surf, rr, raised=not active, fill=(84, 78, 96) if hover else (66, 62, 76))
             if it.get("unit"):
                 kind = it["unit"]
-                icon = fit(self.sp.unit(kind, PLAYER, g.teams[PLAYER].designs[kind]).image, 20)
+                icon = self.sp.icon_hi("unit:" + kind, 20, PLAYER, g.teams[PLAYER].designs[kind])
             else:
-                icon = fit(self.sp.icons[it["icon"]], 20)
-            surf.blit(icon, icon.get_rect(center=(rr.x + 12, rr.centery)))
+                icon = self.sp.icon_hi(it["icon"], 20)
+            self.picture(icon, rr.x + 12, rr.centery)
             draw_text(surf, it["key"], rr.x + 2, rr.y + 1, YELLOW)
             tx = rr.x + 25
             draw_text(surf, self.clip_text(it["name"], rr.right - tx - 2), tx, rr.y + 3, (230, 230, 230))
@@ -172,6 +180,7 @@ class HUD:
                 dim = pygame.Surface((rr.w - 2, rr.h - 2), pygame.SRCALPHA)
                 dim.fill((0, 0, 0, 90))
                 surf.blit(dim, (rr.x + 1, rr.y + 1))
+                self.layer.fill((rr.x + 1, rr.y + 1, 22, rr.h - 2), (0, 0, 0, 90))   # the picture too
 
     def draw_training(self, surf, ctrl, kind, rr):
         """How many of this unit are queued, and the progress of the one in training."""
@@ -253,8 +262,11 @@ class HUD:
         if len(sel) > 1:
             for e, r in zip(sel, self.multi_rects(len(sel))):
                 bevel(surf, r, fill=(58, 54, 66))
-                img = fit(self.sp.entity_image(e), 18)
-                surf.blit(img, img.get_rect(center=r.center))
+                if e.is_unit:
+                    img = self.sp.icon_hi("unit:" + e.kind, 18, e.team, e.loadout)
+                else:
+                    img = self.sp.icon_hi("bld:" + e.kind, 18, e.team)
+                self.picture(img, *r.center)
                 hp_bar(surf, r.x + 2, r.bottom + 2, r.w - 4, e.hp / e.max_hp)
             if len(sel) > 32:
                 draw_text(surf, f"+{len(sel) - 32}", CARD_X - 10, SCREEN_H - 10, GREY, align="right")
@@ -262,8 +274,7 @@ class HUD:
 
         e = sel[0]
         bevel(surf, (INFO_X + 2, VIEW_H + 6, 40, 40), fill=(58, 54, 66))
-        p = self.sp.portrait(e)
-        surf.blit(p, p.get_rect(center=(INFO_X + 22, VIEW_H + 26)))
+        self.picture(self.sp.portrait(e), INFO_X + 22, VIEW_H + 26)
         x, y = TEXT_X, VIEW_H + 8
         w = draw_text(surf, e.name, x, y, YELLOW)
         if e.team == ENEMY:
@@ -302,8 +313,7 @@ class HUD:
             for i, u in enumerate(e.occupants):
                 r = pygame.Rect(TEXT_X + i * 25, VIEW_H + 46, 22, 22)
                 bevel(surf, r, fill=(58, 54, 66))
-                img = fit(self.sp.unit(u.kind, PLAYER, u.loadout).image, 18)
-                surf.blit(img, img.get_rect(center=r.center))
+                self.picture(self.sp.icon_hi("unit:" + u.kind, 18, PLAYER, u.loadout), *r.center)
                 hp_bar(surf, r.x + 2, r.bottom + 2, r.w - 4, u.hp / u.max_hp)
             if not e.occupants:
                 draw_text(surf, "Right-click it with infantry to man it.", x, y + 18, GREY)
@@ -314,8 +324,7 @@ class HUD:
             draw_text(surf, f"{len(e.queue)}/{QUEUE_MAX}", CARD_X - 8, y + 9, GREY, align="right")
             for i, (it, r) in enumerate(zip(e.queue, self.queue_rects(e))):
                 bevel(surf, r, fill=(58, 54, 66))
-                img = fit(self.sp.unit(it["kind"], PLAYER, it["loadout"]).image, 14)
-                surf.blit(img, img.get_rect(center=r.center))
+                self.picture(self.sp.icon_hi("unit:" + it["kind"], 14, PLAYER, it["loadout"]), *r.center)
                 if i == 0:
                     hp_bar(surf, r.x + 2, r.bottom + 2, r.w - 4, e.prod_timer / it["time"])
         else:
@@ -341,10 +350,11 @@ class HUD:
             bevel(surf, r, raised=not active, fill=(84, 78, 96) if hover else (66, 62, 76))
             if cmd.get("unit"):
                 kind = cmd["unit"]
-                icon = fit(self.sp.unit(kind, PLAYER, self.game.teams[PLAYER].designs[kind]).image, 26)
+                self.picture(self.sp.icon_hi("unit:" + kind, 26, PLAYER, self.game.teams[PLAYER].designs[kind]),
+                             *r.center)
             else:
                 icon = self.sp.icons[cmd["icon"]]
-            surf.blit(icon, icon.get_rect(center=r.center))
+                surf.blit(icon, icon.get_rect(center=r.center))
             if cmd.get("cost", 0) > credits:
                 dim = pygame.Surface((r.w - 2, r.h - 2), pygame.SRCALPHA)
                 dim.fill((0, 0, 0, 130))
