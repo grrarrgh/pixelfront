@@ -9,7 +9,7 @@ A unit definition (UNIT in units/<kind>.py) holds its base stats and:
 
 To add a unit: write units/<kind>.py with a UNIT dict, add it below, and give it a model.
 """
-from . import engineer, rifleman, medic, heavy, jeep, tank
+from . import engineer, rifleman, medic, heavy, antiarmor, jeep, tank
 
 # Order matters: it's the order units appear in lists, the motion test and the title screen.
 UNITS = {
@@ -17,6 +17,7 @@ UNITS = {
     "rifleman": rifleman.UNIT,
     "medic": medic.UNIT,
     "heavy": heavy.UNIT,
+    "antiarmor": antiarmor.UNIT,
     "jeep": jeep.UNIT,
     "tank": tank.UNIT,
 }

@@ -38,6 +38,7 @@ TEST_TARGETS = [  # (kind, loadout overrides) for the test range
     ("rifleman", {}), ("rifleman", {"armor": 0}), ("rifleman", {"armor": 2}),
     ("rifleman", {"weapon": 0}), ("rifleman", {"weapon": 2}), ("rifleman", {"engine": 2}),
     ("medic", {}), ("engineer", {}), ("heavy", {}), ("heavy", {"armor": 2, "engine": 0}),
+    ("antiarmor", {}), ("antiarmor", {"weapon": 2}),
     ("jeep", {}), ("jeep", {"armor": 2, "weapon": 2}), ("tank", {}), ("tank", {"armor": 0, "engine": 2}),
 ]
 
@@ -91,7 +92,8 @@ class Game:
                     self.add(Building(kind, PLAYER, *spot))
             self.refresh()
             for kind, lo in (("tank", {}), ("jeep", {}), ("heavy", {}), ("rifleman", {"weapon": 0}),
-                             ("rifleman", {}), ("rifleman", {"weapon": 2}), ("medic", {})):
+                             ("rifleman", {}), ("rifleman", {"weapon": 2}), ("medic", {}),
+                             ("antiarmor", {})):
                 self.refresh()
                 self.spawn_unit(kind, cc, dict(default_loadout(kind), **lo), announce=False)
             self.spawn_test_targets()
@@ -312,6 +314,13 @@ class Game:
                     else:
                         self._nudge(a, -ux * push * 2, -uy * push * 2)
                     continue
+                if a.is_infantry and b.is_infantry and a.moving != b.moving:
+                    # A soldier on the move squeezes past one standing still instead of shoving them.
+                    if a.moving:
+                        self._nudge(a, -ux * push * 2, -uy * push * 2)
+                    else:
+                        self._nudge(b, ux * push * 2, uy * push * 2)
+                    continue
                 self._nudge(a, -ux * push, -uy * push)
                 self._nudge(b, ux * push, uy * push)
 
@@ -331,6 +340,32 @@ class Game:
                 if 0 < ahead < reach and abs(side) < v.radius + u.radius + 2:
                     s = 1 if side >= 0 else -1
                     self._nudge(u, -fy * s * YIELD_SPEED * dt, fx * s * YIELD_SPEED * dt)
+
+    STEER_LOOK = 10   # px beyond touching distance a walking soldier looks for someone in the way
+
+    def steer_around(self, u, ux, uy):
+        """The direction a walking soldier heading (ux, uy) should take to curve around the
+        nearest soldier standing in their way (not walking themselves), or (ux, uy) if clear."""
+        best = None
+        for o in self.units:
+            if o is u or not o.is_infantry or o.moving:
+                continue
+            ox, oy = o.x - u.x, o.y - u.y
+            clear = u.radius + o.radius + 1
+            ahead = ox * ux + oy * uy
+            if ahead <= 0 or ahead > clear + self.STEER_LOOK:
+                continue
+            side = oy * ux - ox * uy          # how far off our line they stand (+ = to our right)
+            if abs(side) < clear and (best is None or ahead < best[0]):
+                best = (ahead, side, clear)
+        if best is None:
+            return ux, uy
+        _, side, clear = best
+        s = 1 if side <= 0 else -1            # go round the far side
+        w = 1.5 * (clear - abs(side)) / clear
+        nx, ny = ux - s * uy * w, uy + s * ux * w
+        n = math.hypot(nx, ny)
+        return nx / n, ny / n
 
     def _nudge(self, u, dx, dy):
         if self.world.walkable_px(u.x + dx, u.y + dy):
@@ -376,10 +411,14 @@ class Game:
                    for x in range(target.tx, target.tx + target.size))
 
     def find_enemy_near(self, unit, radius):
+        # Anti-armour weapons go for vehicles first: a vehicle counts as half as far away.
+        tank_hunter = unit.vs_vehicle >= 2.5
         best, bd = None, radius
         for e in self.units:
             if e.team != unit.team:
                 d = math.hypot(e.x - unit.x, e.y - unit.y)
+                if d < radius and tank_hunter and e.is_vehicle:
+                    d *= 0.5
                 if d < bd and self.can_target(unit, e):
                     best, bd = e, d
         if best:
@@ -643,9 +682,9 @@ class Game:
 
     # ---- combat -----------------------------------------------------------
 
-    def attack(self, attacker, target, mult=1.0, origin=None):
-        """Fire one round of the attacker's weapon (see weapons.fire)."""
-        weapons.fire(self, attacker, target, mult, origin)
+    def attack(self, attacker, target, mult=1.0, origin=None, wid=None):
+        """Fire one round of the attacker's weapon, or of another it carries (see weapons.fire)."""
+        weapons.fire(self, attacker, target, mult, origin, wid)
 
     def enter(self, unit, bunker):
         """A soldier climbs into a bunker: off the map until unloaded or the bunker falls."""

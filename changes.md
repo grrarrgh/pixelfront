@@ -2,6 +2,48 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.14.0 "Dig In" (2026-10-27)
+
+A new anti-armour soldier, a tank gun that has to dig in before it fires, bullets that spray,
+and infantry that step around each other.
+
+### Added
+
+- **Anti-Armor infantry**, trained at the Barracks. They kneel to fire. Weapon tiers:
+  - Light: a rifle with an underbarrel grenade launcher. It fires the rifle, and lobs a
+    grenade whenever the launcher's 9-second reload allows.
+  - Medium: a 6-round automatic grenade launcher. Bursts of 6 grenades, then a long reload.
+  - Heavy: the Javelin. The missile arcs up and dives onto its target, steering after it as it
+    moves. It wrecks vehicles but is weak against soldiers, and Javelin teams pick vehicles
+    first.
+  - The soldiers wear orange shoulder patches with a black bar and carry spare rounds on their
+    back. They also appear on the test range, the title screen and the motion test, and the
+    computer opponent trains them.
+- **Firing a second weapon:** a weapon can carry a second one (the underbarrel launcher) with
+  its own damage, range and reload.
+
+### Changed
+
+- **The tank's 155mm is now a self-propelled gun that must deploy:**
+  - It has an open-topped gun house with a sloped front shield, a long barrel with a muzzle
+    brake and recuperators, a rack of ready rounds and a gunner's seat, instead of a turret.
+  - While travelling, the barrel rests on a travel lock on the front deck and the spades are
+    folded against the back.
+  - To fire, it turns to face the target, then spends 2 seconds deploying: spades drop and dig
+    in at the rear, jacks push pads down at the sides, the travel lock folds flat and the barrel
+    rises to firing angle.
+  - Dug in, it can only fire within 10° of where it points. It packs up (2 seconds) before it
+    can turn further or drive off, and does so on its own when ordered to move.
+  - Its status reads Deploying, Deployed, Firing (deployed) or Packing up. Dug in and idle, it
+    slowly raises and lowers its barrel.
+- **Bullets spray instead of streaming.** Each round is now a short streak with a fading tail
+  that flies along its own line. Misses scatter in a cone that widens with range and
+  inaccuracy, and carry on past the target. Machine-gun bursts fan out.
+- **Infantry walk around soldiers who are standing still.** Instead of pushing through, a
+  soldier on the move steers round anyone in the way. On contact, the walker takes all of the
+  push, so standing soldiers stay put.
+- The motion test fits seven rows: infantry are shown at 3× instead of 4×.
+
 ## 0.13.0 "Close Order" (2026-10-27)
 
 Groups that move as one, with vehicles in front, plus clearer click feedback and per-factory designs.

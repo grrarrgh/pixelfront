@@ -34,6 +34,9 @@ class Unit(Entity):
         self.hull_turn = base.get("hull_turn", 180)   # vehicles: degrees per second
         self.kneels = base.get("kneels", False)       # must kneel before firing
         self.weapon = st["weapon"]   # the loadout can swap the weapon type
+        # A second weapon on the first (an underbarrel launcher), fired when its reload allows.
+        self.secondary = weapon_def(self.weapon)["secondary"] if self.weapon else None
+        self.sec_cooldown = 0.0
         self.supply = base["supply"]
         self.max_hp = self.hp = max(1, round(st["hp"]))
         self.armor = round(st["armor"])
@@ -100,6 +103,10 @@ class Unit(Entity):
         self.steer = 0.0          # front-wheel angle for the renderer (model degrees, + = left)
         # Heavy infantry kneel before firing; this counts up to KNEEL_TIME while they settle.
         self.kneel = 0.0
+        # Artillery digs in before firing: deploy runs 0 (ready to drive) .. 1 (ready to fire).
+        self.deploy_time = weapon_def(self.weapon)["deploy"] if self.weapon else 0.0
+        self.deploy = 0.0
+        self.packing = False
 
     def rect(self):
         r = self.radius
@@ -112,7 +119,8 @@ class Unit(Entity):
     def muzzle_pos(self):
         from ..sprites import muzzle_offset  # geometry lives with the 3D models
         dx, dy = muzzle_offset(self.kind, self.loadout, self.facing, self.suppressed,
-                               self.turret - self.facing if self.has_turret else 0.0, self.kneeling)
+                               self.turret - self.facing if self.has_turret else 0.0, self.kneeling,
+                               self.deploy >= 1)
         return self.x + dx, self.y + dy
 
     @property
@@ -155,12 +163,19 @@ class Unit(Entity):
     def attack_range(self):
         return self.range * (PRONE_RANGE if self.suppressed else 1.0)
 
+    DEPLOYED_ARC = 10   # degrees either side a dug-in gun can still lay onto without moving
+
     def aim_at(self, x, y, dt):
         """Turn the turret (or hull, for fixed guns) towards a point. Returns True once on target."""
         want = math.degrees(math.atan2(y - self.y, x - self.x)) % 360
         if not self.has_turret:
             if self.is_vehicle:   # fixed gun: swing the whole hull round at its turn rate
                 diff = (want - self.facing + 180) % 360 - 180
+                if self.deploy > 0:   # dug in: fire within the arc, or pack up to turn
+                    if abs(diff) <= self.DEPLOYED_ARC:
+                        return True
+                    self._pack(dt)
+                    return False
                 step = self.hull_turn * dt
                 self.facing = (self.facing + max(-step, min(step, diff))) % 360
                 return abs(diff) <= 6
@@ -170,6 +185,19 @@ class Unit(Entity):
         step = TURRET_SPEED * dt
         self.turret = want if abs(diff) <= step else (self.turret + math.copysign(step, diff)) % 360
         return abs(diff) <= 8
+
+    def _pack(self, dt):
+        """Artillery packing up: spades up, barrel down, before it can turn or drive."""
+        if self.deploy >= 1:
+            log.debug("%s #%d packing up", self.name, self.id)
+        self.packing = True
+        self.deploy = max(0.0, self.deploy - dt / self.deploy_time)
+
+    def _dig_in(self, dt):
+        self.packing = False
+        self.deploy = min(1.0, self.deploy + dt / self.deploy_time)
+        if self.deploy >= 1:
+            log.debug("%s #%d deployed", self.name, self.id)
 
     def _relax_turret(self, dt):
         if self.has_turret:
@@ -258,8 +286,12 @@ class Unit(Entity):
     def status(self):
         if self.suppressed:
             return "Pinned down!"
+        if 0 < self.deploy < 1:
+            return "Packing up" if self.packing else "Deploying"
         if self.order == "build":
             return "Going to build " + BUILDINGS[self.build_plan[0]]["name"]
+        if self.deploy >= 1 and self.order in ("idle", "attack"):
+            return "Deployed" if self.order == "idle" else "Firing (deployed)"
         return {"idle": "Idle", "move": "Moving", "amove": "Attack-moving", "attack": "Attacking",
                 "heal": "Healing", "repair": "Repairing", "construct": "Building",
                 "assist": "Helping to build", "garrison": "Heading for the bunker",
@@ -371,6 +403,9 @@ class Unit(Entity):
         """Advance along the current path. Returns True once there is nowhere left to go."""
         if not self.path:
             return True
+        if self.deploy > 0:   # artillery packs up before it can drive off
+            self._pack(dt)
+            return False
         world = game.world
         tx, ty = self.path[0]
         if not world.walkable(tx, ty):
@@ -402,14 +437,23 @@ class Unit(Entity):
             self.x, self.y = gx, gy
             self.path.pop(0)
             return not self.path
-        self.x += dx / d * step
-        self.y += dy / d * step
+        ux, uy = dx / d, dy / d
+        if self.is_infantry:
+            sx, sy = game.steer_around(self, ux, uy)   # walk round anyone standing in the way
+            if (sx, sy) != (ux, uy) and game.world.walkable_px(self.x + sx * step, self.y + sy * step):
+                ux, uy = sx, sy
+                self.face(self.x + ux, self.y + uy)
+        self.x += ux * step
+        self.y += uy * step
         return False
 
     def step_toward(self, game, gx, gy, dt):
         dx, dy = gx - self.x, gy - self.y
         d = math.hypot(dx, dy)
         if d < 0.5:
+            return
+        if self.deploy > 0:
+            self._pack(dt)
             return
         step = min(d, self.move_speed * dt)
         if self.is_vehicle:
@@ -454,6 +498,7 @@ class Unit(Entity):
 
     def update(self, game, dt):
         self.cooldown -= dt
+        self.sec_cooldown -= dt
         self.flash = max(0.0, self.flash - dt)
         self.lunge = max(0.0, self.lunge - dt)
         self._update_suppression(dt)
@@ -589,9 +634,18 @@ class Unit(Entity):
         if self.kneels and not self.suppressed and self.kneel < KNEEL_TIME:
             self.kneel += dt   # kneel down before the first shot
             return
+        if self.deploy_time and self.deploy < 1:
+            if on_target:
+                self._dig_in(dt)   # artillery: spades down and barrel up before the first shot
+            return
         if on_target and self.cooldown <= 0:
             self.cooldown = self.attack_time
             self.lunge = 0.12
+            sec = self.secondary and weapon_def(self.secondary)
+            if sec and self.sec_cooldown <= 0 and self.edge_dist(t) <= sec["range"]:
+                self.sec_cooldown = sec["cooldown"]   # this pull fires the grenade instead
+                game.attack(self, t, wid=self.secondary)
+                return
             self.burst_left, self.burst_timer = self.burst - 1, BURST_GAP
             game.attack(self, t)
 

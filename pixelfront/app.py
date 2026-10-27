@@ -230,8 +230,8 @@ class App:
         x = x if x < span_x else 2 * span_x - x
         screen.blit(self.title_bg, (0, 0), (x * RES, span_y // 2 * RES, DISPLAY_W, DISPLAY_H))
         screen.blit(self.title_dim, (0, 0))
-        lineup = (("engineer", -170), ("rifleman", -125), ("medic", -80), ("heavy", -35),
-                  ("jeep", 35), ("tank", 125))
+        lineup = (("engineer", -190), ("rifleman", -150), ("medic", -110), ("heavy", -70),
+                  ("antiarmor", -30), ("jeep", 35), ("tank", 125))
         for kind, dx in lineup:   # marching at full resolution, blown up 2x
             spr = self.sprites.unit(kind, PLAYER)
             img, (ox, oy) = spr.frame("walk", int(self.title_time * 8), 20)

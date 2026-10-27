@@ -94,10 +94,12 @@ PRONE_ARMORED_BLAST = 0.6
 
 # How a projectile flies and looks. speed in px/s; arc = peak height in px (0 = flies straight
 # and homes in on its target; arcing rounds are lobbed at the spot the target stood on);
-# boom = size of the explosion drawn; trail = what it leaves behind.
+# boom = size of the explosion drawn; trail = what it leaves behind; homing = an arcing round
+# that still steers onto its target.
 PROJECTILE_STYLES = {
     "rocket":     dict(speed=150, arc=0, boom=5, trail="smoke"),
     "atgm":       dict(speed=130, arc=0, boom=6, trail="wire"),
+    "javelin":    dict(speed=110, arc=40, boom=7, trail="smoke", homing=True),   # top attack
     "shell":      dict(speed=220, arc=0, boom=6, trail=None),
     "autocannon": dict(speed=320, arc=0, boom=2, trail=None),
     "grenade":    dict(speed=100, arc=14, boom=5, trail=None),
@@ -106,13 +108,18 @@ PROJECTILE_STYLES = {
 
 # damage per round, cooldown = seconds between trigger pulls, range in px, accuracy 0..1,
 # burst = rounds per trigger pull, projectile = a PROJECTILE_STYLES key (None = instant hit),
-# splash = blast radius in px, fixed = can't traverse (the vehicle turns to aim).
+# splash = blast radius in px, fixed = can't traverse (the vehicle turns to aim), deploy = seconds
+# to dig in before it can fire (and to pack up again before moving).
 WEAPONS = {
     # Bullets
     "pistol": dict(name="Pistol", type="bullet", damage=3.6, cooldown=0.72, range=38, accuracy=0.97,
                    desc="Light sidearm: accurate, short range."),
     "rifle": dict(name="Rifle", type="bullet", damage=6, cooldown=0.9, range=64, accuracy=0.85,
                   desc="All-purpose rifle."),
+    # secondary = a second weapon fired whenever its own (much longer) reload allows.
+    "rifle_ugl": dict(name="Rifle + grenade launcher", type="bullet", damage=6, cooldown=0.9, range=64,
+                      accuracy=0.85, secondary="ugl",
+                      desc="Rifle with an underbarrel launcher that lobs a grenade every 9s."),
     "m60": dict(name="M60", type="bullet", damage=5, cooldown=1.0, burst=4, range=70, accuracy=0.62,
                 desc="Machine gun: 4-round bursts that pin infantry down; inaccurate, weak vs armour."),
     "m2": dict(name="M2 Browning", type="bullet", damage=7, cooldown=0.3, range=76, accuracy=0.8,
@@ -121,6 +128,12 @@ WEAPONS = {
     "grenade_launcher": dict(name="Grenade launcher", type="explosive", damage=14, cooldown=1.6, range=80,
                              accuracy=0.8, projectile="grenade", splash=12,
                              desc="Lobbed grenades that burst over a small area."),
+    "ugl": dict(name="40mm underbarrel grenade", type="explosive", damage=22, cooldown=9.0, range=80,
+                accuracy=0.8, vs_vehicle=1.6, projectile="grenade", splash=12,
+                desc="Dual-purpose grenade: splash, and good against light armour."),
+    "agl6": dict(name="Auto grenade launcher", type="explosive", damage=9, cooldown=4.5, burst=6, range=84,
+                 accuracy=0.7, vs_vehicle=1.3, projectile="grenade", splash=10,
+                 desc="6-round automatic grenade launcher: bursts of splashing grenades, then a long reload."),
     "uag40": dict(name="UAG-40", type="explosive", damage=10, cooldown=0.6, range=84, accuracy=0.75,
                   projectile="grenade", splash=12,
                   desc="Automatic grenade launcher: bursts of splashing grenades."),
@@ -131,12 +144,18 @@ WEAPONS = {
                        desc="Autocannon: fast 10-round bursts of light HE rounds, then a reload. "
                             "Wears tanks down; deadly in numbers."),
     "howitzer_155": dict(name="155mm artillery", type="explosive", damage=55, cooldown=5.0, range=160,
-                         accuracy=0.65, projectile="artillery", splash=22, fixed=True,
-                         desc="Huge range and blast, slow and inaccurate. Fixed gun: the tank turns to aim."),
+                         accuracy=0.65, projectile="artillery", splash=22, fixed=True, deploy=2.0,
+                         desc="Huge range and blast, slow and inaccurate. Must deploy (2s) before "
+                              "firing and pack up before moving; the vehicle turns to aim."),
     # Anti-armour
     "rocket_launcher": dict(name="Rocket launcher", type="anti_armor", damage=24, cooldown=2.4, range=84,
                             accuracy=0.9, projectile="rocket",
                             desc="Shoulder-fired rockets: slow to reload, devastating vs vehicles."),
+    # Low base damage with a big multiplier against vehicles: poor at killing soldiers.
+    "javelin": dict(name="Javelin", type="anti_armor", damage=18, cooldown=4.0, range=124, accuracy=0.97,
+                    vs_vehicle=3.4, projectile="javelin",
+                    desc="Missile that arcs up and dives onto its target: longest reach, wrecks "
+                         "vehicles, weak against soldiers, slow to reload."),
     "tow": dict(name="Twin TOW", type="anti_armor", damage=32, cooldown=2.8, range=110, accuracy=0.95,
                 vs_vehicle=1.8, projectile="atgm",
                 desc="Wire-guided missiles: long range, deadly vs vehicles, slow to reload."),
@@ -145,7 +164,12 @@ WEAPONS = {
                        desc="The all-round tank gun."),
 }
 
-BULLET_SPREAD = 2.5   # px of extra scatter at the far end of every bullet's path (visual)
+# Bullets fan out in a cone (visual only: hits are decided by accuracy). Each round strays
+# sideways by up to SPRAY_CONE px per px of range, scaled up for inaccurate guns; hits stay on
+# the target's body, misses fly on past it.
+SPRAY_CONE = 0.07
+HIT_SCATTER = 3.0      # px a hit lands from the target's centre
+MISS_OVERSHOOT = 14    # px a miss can carry on beyond the target
 
 # Stats a weapon contributes to its unit (see modules.compute_stats).
 WEAPON_STATS = ("damage", "cooldown", "range", "accuracy", "burst", "vs_vehicle")
@@ -154,7 +178,7 @@ WEAPON_STATS = ("damage", "cooldown", "range", "accuracy", "burst", "vs_vehicle"
 def weapon(wid):
     """A weapon's full definition: its type's defaults overlaid with its own entries."""
     w = WEAPONS[wid]
-    out = dict(burst=1, splash=0, projectile=None, fixed=False)
+    out = dict(burst=1, splash=0, projectile=None, fixed=False, secondary=None, deploy=0.0)
     out.update(WEAPON_TYPES[w["type"]])
     out.update(w)
     return out
@@ -170,12 +194,15 @@ def stats(wid):
 
 # ---- firing -----------------------------------------------------------------------
 
-def fire(game, shooter, target, mult=1.0, origin=None):
+def fire(game, shooter, target, mult=1.0, origin=None, wid=None):
     """One trigger pull's round from `shooter` at `target`. Accuracy decides whether it hits;
     misses land somewhere nearby. mult scales damage (garrison bonus); origin overrides where
-    the shot starts (a bunker's firing slit)."""
-    w = weapon(shooter.weapon)
-    accuracy = shooter.accuracy * (PRONE_ACCURACY if shooter.suppressed else 1.0)
+    the shot starts (a bunker's firing slit); wid fires another weapon the shooter carries (an
+    underbarrel launcher) with that weapon's own numbers."""
+    w = weapon(wid or shooter.weapon)
+    if wid:
+        mult *= w["damage"] / max(0.01, shooter.damage)
+    accuracy = (w["accuracy"] if wid else shooter.accuracy) * (PRONE_ACCURACY if shooter.suppressed else 1.0)
     if target.is_unit and target.suppressed:
         accuracy *= PRONE_TARGET_HIT   # a soldier hugging the dirt is a small target
     rng = game.rng
@@ -189,19 +216,24 @@ def fire(game, shooter, target, mult=1.0, origin=None):
     if w["projectile"] is None:
         _fire_bullet(game, shooter, target, w, mult, start, hit, miss)
     else:
-        game.projectiles.append(Projectile(shooter, target, shooter.damage * mult, w, start, miss))
+        game.projectiles.append(Projectile(shooter, target, shooter.damage * mult, w, start, miss,
+                                           w["vs_vehicle"] if wid else None))
 
 
 def _fire_bullet(game, shooter, target, w, mult, start, hit, miss):
     rng = game.rng
+    tx, ty = target.x, target.y - 3
+    dx, dy = tx - start[0], ty - start[1]
+    dist = max(1.0, math.hypot(dx, dy))
+    ux, uy = dx / dist, dy / dist
     if hit:
-        end = (target.x + rng.uniform(-3, 3), target.y - 3 + rng.uniform(-3, 3))
+        end = (tx + rng.uniform(-HIT_SCATTER, HIT_SCATTER), ty + rng.uniform(-HIT_SCATTER, HIT_SCATTER))
     else:
-        end = (target.x + miss[0], target.y + miss[1])
+        # Off to one side of the line, and carrying on past the target.
+        side = rng.uniform(-1, 1) * dist * SPRAY_CONE * (2.4 - w["accuracy"] * 1.4) + rng.choice((-1, 1)) * 4
+        on = rng.uniform(0, MISS_OVERSHOOT)
+        end = (tx + miss[0] * 0.5 - uy * side + ux * on, ty + miss[1] * 0.5 + ux * side * 0.6 + uy * on)
         game.particles.append([end[0], end[1], 0, -15, 0.25, (200, 176, 130), 1.0])
-    # Rounds leave the muzzle on slightly different lines, so a burst fans out.
-    end = (end[0] + rng.uniform(-BULLET_SPREAD, BULLET_SPREAD),
-           end[1] + rng.uniform(-BULLET_SPREAD, BULLET_SPREAD) * 0.6)
     game.tracers.append([start[0], start[1], end[0], end[1], 0.0, rng.random()])
     if w["pin_per_round"] and target.is_unit:
         # Rounds snapping past keep heads down whether or not they hit.
@@ -233,7 +265,7 @@ def pin_area(game, x, y, radius, amount):
 class Projectile:
     """Flies over the ground at (gx, gy) at height h; drawn at (x, y) = (gx, gy - h)."""
 
-    def __init__(self, source, target, damage, w, start, miss_offset=None):
+    def __init__(self, source, target, damage, w, start, miss_offset=None, vs_vehicle=None):
         style = PROJECTILE_STYLES[w["projectile"]]
         self.source = source
         self.target = target
@@ -241,15 +273,16 @@ class Projectile:
         self.weapon = w
         self.style = w["projectile"]
         self.team = source.team
-        self.vs_vehicle = source.vs_vehicle
+        self.vs_vehicle = source.vs_vehicle if vs_vehicle is None else vs_vehicle
         self.speed, self.arc = style["speed"], style["arc"]
         self.boom, self.trail = style["boom"], style["trail"]
         self.splash = w["splash"]
         self.gx, self.gy = source.x, source.y
         self.h0 = self.h = max(0.0, source.y - start[1])
         self.x, self.y = start
-        # Misses and lobbed rounds fly at a fixed spot; straight hits home in on the target.
-        self.locked = self.arc > 0 or miss_offset is not None
+        # Misses and lobbed rounds fly at a fixed spot; straight hits (and homing missiles) home
+        # in on the target.
+        self.locked = (self.arc > 0 and not style.get("homing")) or miss_offset is not None
         mx, my = miss_offset or (0.0, 0.0)
         self.aim = (target.x + mx, target.y + my)
         self.total = max(1.0, math.hypot(self.aim[0] - self.gx, self.aim[1] - self.gy))

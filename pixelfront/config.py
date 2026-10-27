@@ -53,7 +53,7 @@ RETREAT_COOLDOWN = 4.0     # seconds before a pinned soldier will crawl back aga
 RETREAT_TIMEOUT = 6.0      # give up on a retreat that's taking too long
 
 BURST_GAP = 0.09           # seconds between rounds of a burst (machine guns)
-TRACER_LIFE = 0.07         # seconds a dashed bullet trail stays on screen
+TRACER_LIFE = 0.11         # seconds a round's tracer takes to fly from the muzzle to where it lands
 
 # Infantry manning a bunker: reload time x0.75, damage and range x1.1.
 GARRISON_RELOAD = 0.75
@@ -81,7 +81,7 @@ BUILDINGS = {
                     sight=8, trains=["engineer"],
                     desc="Trains engineers. +1 credit/s."),
     "barracks": dict(name="Barracks", size=2, hp=800, armor=3, cost=200, time=30,
-                     sight=6, trains=["rifleman", "medic", "heavy"],
+                     sight=6, trains=["rifleman", "medic", "heavy", "antiarmor"],
                      desc="Trains infantry."),
     # garrison = what manning it does for the soldiers inside: reload (time x), damage x,
     # range x, heal (hp/s), sight (+tiles for the building while manned).

@@ -360,13 +360,13 @@ def _hold(gun, act, shield=False):
     gun is None)."""
     if gun == "pistol":
         hold = {-1: (88, 0) if act == "fire" else (30, 45), 1: (0, 15)}
-    elif gun == "rifle":
+    elif gun in ("rifle", "rifle_ugl"):
         hold = {-1: (30, 70), 1: (45, 50)} if act != "fire" else {-1: (40, 70), 1: (55, 45)}
     elif gun == "m60":                    # at the hip
         hold = {-1: (10, 70), 1: (30, 60)}
-    elif gun == "grenade_launcher":       # at the shoulder
+    elif gun in ("grenade_launcher", "agl6"):   # at the shoulder
         hold = {-1: (30, 70), 1: (45, 50)}
-    elif gun == "rocket_launcher":        # tube on the shoulder
+    elif gun in ("rocket_launcher", "javelin"):   # tube on the shoulder
         hold = {-1: (20, 110), 1: (60, 70)}
     elif act == "work":
         hold = {1: (80, 10), -1: (5, 15)}
@@ -474,7 +474,7 @@ def soldier(kind, light, lo, anim="idle", i=0):
             add(fx((mx + 0.6, my, mz)), (1.2, 1.2, 1.2), FLASH_W, glow=True)
             add(fx((mx + 0.8, my + 0.8, mz + 0.8)), (0.8, 0.8, 0.8), FLASH_Y, glow=True)
         else:
-            big = 2.6 if kind == "heavy" else 2.0
+            big = 2.6 if kind in ("heavy", "antiarmor") else 2.0
             add(fx((mx + big / 2, my, mz)), (big, big, big), FLASH_Y, glow=True)
             add(fx((mx + 0.4, my, mz)), (big * 0.6,) * 3, FLASH_W, glow=True)
     if anim == "idle" and i:
@@ -618,6 +618,12 @@ def _body(B, kind, tc, armor, weapon, speed, moving):
                 cyl((-3.0, s * 1.2, 8.2), 0.55, 1.4, "z", FLAME, glow=True, n=8)
     if backpack:
         _kit_backpack(add, kind, -3.6 if speed != 2 else -5.0)
+    if kind == "antiarmor" and speed == 1:   # two spare rounds in a carrier on the back
+        add((-2.3, 0, 12.0), (0.6, 4.6, 5.4), STRAP)
+        for y in (-1.2, 1.2):
+            cyl((-3.3, y, 11.6), 1.0, 5.6, "z", OLIVE_D, n=8)
+            cyl((-3.3, y, 15.0), 0.8, 1.2, "z", WARHEAD, n=8)
+            cyl((-3.3, y, 15.8), 0.45, 0.6, "z", shade(WARHEAD, 0.85), n=8)
     if kind in ("medic", "engineer") and weapon == 0:
         body, _ = KIT_COLORS[kind]
         add((0.4, -4.0, 9.4), (3.4, 1.8, 3.0), body)
@@ -658,6 +664,9 @@ def _arms(B, kind, tc, armor, weapon, arms):
         elif kind == "engineer":
             add((0.5, y, top), (1.3, 2.3, 0.5), YELLOW, upper)
             add((-0.65, y, top), (1.0, 2.3, 0.5), METAL_L, upper)
+        elif kind == "antiarmor":   # warhead orange with a black bar
+            add((0, y, top), (2.3, 2.3, 0.5), WARHEAD, upper)
+            add((0, y, top + 0.2), (0.6, 2.3, 0.3), (30, 28, 30), upper)
         if armor == 2:
             add((0, y, SHOULDER_Z - 0.4), (2.5, 2.3, 1.6), METAL, upper)   # shoulder plate
             add((0.2, y, SHOULDER_Z + 0.42), (2.0, 1.9, 0.1), METAL_D, upper)
@@ -693,7 +702,7 @@ def _weapon(W, kind, gun, act, recoil):
         add((3.4 + r, y, z - 1.3), (0.7, 0.8, 1.4), GUN, tilt(12, 3.4 + r, y, z - 0.6))   # pistol grip
         add((5.8 + r, y, z + 1.65), (1.0, 0.4, 1.0), GUN_L)                                # ladder sight
         return (10.6 + r, y, z + 0.25)
-    if gun == "rifle":                                 # rifle at the ready
+    if gun in ("rifle", "rifle_ugl"):                  # rifle at the ready
         z, y = (13.4 if aim else 12.6), -1.6
         add((0.4 + r, y, z - 0.45), (2.6, 1.0, 1.9), POLY)                                 # stock
         add((-0.95 + r, y, z - 0.45), (0.3, 1.1, 2.1), (36, 36, 40))                       # butt pad
@@ -707,6 +716,11 @@ def _weapon(W, kind, gun, act, recoil):
         cyl((9.6 + r, y, z + 0.15), 0.3, 2.4, "x", GUN, n=8)                              # barrel
         cyl((10.95 + r, y, z + 0.15), 0.42, 0.5, "x", GUN_L, n=8)                         # flash hider
         add((8.4 + r, y, z + 0.8), (0.3, 0.3, 0.6), GUN)                                   # front sight
+        if gun == "rifle_ugl":                         # 40mm launcher under the handguard
+            cyl((7.6 + r, y, z - 1.15), 0.85, 3.6, "x", OLIVE_D, n=10)                     # tube
+            cyl((9.45 + r, y, z - 1.15), 0.6, 0.15, "x", (30, 30, 34), n=10)               # bore
+            add((5.5 + r, y, z - 1.5), (1.2, 0.9, 1.4), GUN)                               # breech / trigger
+            add((5.2 + r, y, z - 2.4), (0.6, 0.6, 0.8), GUN_L)                             # trigger guard
         return (11.3 + r, y, z + 0.15)
     if gun == "pistol":
         z, y = (14.6 if aim else 11.6), -3.7
@@ -737,12 +751,40 @@ def _weapon(W, kind, gun, act, recoil):
         cyl((-5.6 + r, y, z), 1.85, 1.0, "x", OLIVE_D, n=10)                              # rear venturi flare
         for xx in (-2.0, 6.5):
             cyl((xx + r, y, z), 1.55, 0.5, "x", OLIVE_D, n=10)                            # tube bands
-        cyl((10.6 + r, y, z), 1.2, 1.4, "x", (170, 70, 40), n=10)                         # warhead
+        cyl((10.6 + r, y, z), 1.2, 1.4, "x", WARHEAD, n=10)                               # warhead
         cyl((11.6 + r, y, z), 0.7, 0.8, "x", (150, 60, 34), n=8)                          # its nose
         add((2.6 + r, y, z - 2.3), (1.0, 1.0, 1.8), GUN)                                   # grip
         add((1.0 + r, y + 2.1, z + 0.6), (2.0, 1.2, 1.6), GUN)                             # sight unit
         add((1.6 + r, y + 2.75, z + 0.7), (0.12, 0.5, 0.5), CYAN, glow=True)
         return (12.0 + r, y, z)
+    if gun == "agl6":                                  # 6-round automatic grenade launcher
+        z, y = (13.6 if aim else 12.8), -1.8
+        add((0.0 + r, y, z - 0.4), (2.6, 1.2, 2.0), POLY)                                  # stock
+        add((-1.35 + r, y, z - 0.4), (0.3, 1.3, 2.2), (40, 40, 44))                        # butt pad
+        add((3.4 + r, y, z), (4.4, 2.0, 2.4), GUN)                                         # receiver
+        add((3.4 + r, y, z + 1.35), (3.6, 1.4, 0.3), GUN_L)                                # top rail
+        cyl((3.2 + r, y, z + 2.0), 0.6, 2.4, "x", (40, 42, 48), n=8)                       # sight
+        add((4.45 + r, y, z + 2.0), (0.12, 0.7, 0.7), CYAN, glow=True)
+        cyl((4.0 + r, y - 0.2, z - 2.5), 2.0, 1.8, "y", OLIVE_D, n=12)                     # drum magazine
+        cyl((4.0 + r, y - 1.15, z - 2.5), 0.7, 0.1, "y", YELLOW, n=8)                       # its winder
+        cyl((8.2 + r, y, z + 0.2), 1.0, 4.2, "x", GUN, n=10)                               # fat barrel
+        cyl((10.4 + r, y, z + 0.2), 1.2, 0.5, "x", GUN_L, n=10)                            # muzzle
+        add((7.4 + r, y, z - 1.5), (0.8, 0.8, 1.6), GUN)                                   # foregrip
+        add((2.0 + r, y, z - 1.4), (0.8, 0.9, 1.5), GUN, tilt(12, 2.0 + r, y, z - 0.6))   # pistol grip
+        return (10.8 + r, y, z + 0.2)
+    if gun == "javelin":                               # missile tube with the sight unit clamped on
+        z, y = 16.8, -3.4
+        cyl((2.4 + r, y, z), 1.8, 12.0, "x", (110, 112, 82), n=12)                         # launch tube
+        for xx in (-3.4, 8.2):
+            cyl((xx + r, y, z), 2.0, 0.9, "x", (78, 80, 60), n=12)                         # end caps
+        add((0.6 + r, y + 2.6, z - 0.2), (3.2, 2.0, 2.6), (60, 62, 56))                    # command launch unit
+        add((0.6 + r, y + 2.6, z + 1.3), (2.6, 1.6, 0.4), (44, 46, 42))
+        add((-1.15 + r, y + 2.6, z + 0.2), (0.4, 1.0, 0.8), (30, 30, 32))                  # eyepiece
+        add((2.25 + r, y + 2.6, z), (0.12, 1.2, 1.2), CYAN, glow=True)                     # seeker window
+        add((1.0 + r, y + 1.4, z - 1.8), (0.9, 0.9, 1.4), GUN)                             # grips
+        add((-0.6 + r, y + 1.4, z - 1.8), (0.9, 0.9, 1.4), GUN)
+        _backblast(add, aim and recoil >= 1, -4.0 + r, y, z, 1.4)
+        return (8.8 + r, y, z)
     # Medic / engineer: the left hand does the work (injector / wrench).
     if act == "work":
         x, z = 7.4, 14.8
@@ -759,7 +801,17 @@ def _weapon(W, kind, gun, act, recoil):
     return (1.0, 3.7, 9.0)
 
 
+def _backblast(add, on, x, y, z, size):
+    """The flash and dust blown out of the back of a launcher as it fires."""
+    if not on:
+        return
+    add((x - size, y, z), (size * 2, size * 2, size * 2), FLASH_Y, glow=True)
+    add((x - size * 2.6, y, z - size * 0.2), (size * 2, size * 2.4, size * 2), (210, 196, 170))
+    add((x - size * 3.8, y, z - size * 0.4), (size * 1.6, size * 2.8, size * 1.6), (190, 178, 156))
+
+
 KIT_COLORS = {"medic": (WHITE, RED), "engineer": (YELLOW, GUN)}
+WARHEAD = (170, 70, 40)
 
 
 def _kit_mark(add, kind, x, y, z, face_axis, rot=()):
@@ -889,16 +941,17 @@ def _running_gear(B, speed, phase, front, rear, y, z, h, wheel, wreck=False, ste
 
 
 def tank(light, lo, phase=0, recoil=0.0, flash=False, moving=False, wreck=False, turret=0.0, steer=0.0,
-         shake=0.0, elev=0.0):
-    """elev = extra barrel elevation in degrees (the fixed 155mm's idle animation)."""
-    B, muzzle, gear = _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev)
+         shake=0.0, elev=0.0, deploy=0.0):
+    """elev = extra barrel elevation in degrees (the deployed 155mm's idle animation);
+    deploy = 0 (travelling) .. 1 (dug in and ready to fire), for the 155mm."""
+    B, muzzle, gear = _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev, deploy)
     if shake:   # idling engine: the body rocks on its suspension, the running gear stays put
         B[gear:] = _raised(B[gear:], shake)
         muzzle = (muzzle[0], muzzle[1], muzzle[2] + shake)
     return B, muzzle
 
 
-def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_extra=0.0):
+def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_extra=0.0, deploy=0.0):
     tc = team_set(light)
     armor, speed = lo.get("armor", 1), lo.get("engine", 1)
     gun = weapon_of("tank", lo)
@@ -944,9 +997,11 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_ex
             if moving:
                 add((-15.0, s * 3.2, 9.6), (1.4, 1.6, 1.2), FLAME, glow=True)
 
+    if gun == "howitzer_155":   # an artillery piece instead of a turret
+        muzzle = _artillery(B, tc, hull, recoil, flash, wreck, deploy, elev_extra)
+        return B, muzzle, gear
+
     # Turret group (can turn independently of the hull).
-    if weapon_def(gun)["fixed"]:
-        turret = 0.0   # a fixed gun (the 155mm) can't traverse: the whole tank turns to aim
     tr = [("yaw", turret, TANK_PIVOT)]
     if wreck:
         tr.append(("roll", 8, (-1, 0, 12)))
@@ -980,8 +1035,7 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_ex
     r = -recoil
     gz = 13.4
     pivot = (6.6, 0, gz)
-    # Barrel elevation: the 155mm sits raised like an artillery piece; wrecks droop.
-    elev = -10 if wreck else (14 + elev_extra if gun == "howitzer_155" else 0)
+    elev = -10 if wreck else 0   # wrecks' barrels droop
     bar = [("pitch", elev, pivot)] if elev else []
     if gun == "bushmaster":     # Bushmaster II 30mm: slim barrel, muzzle brake, ammo feed box, coax
         tadd((6.8, 0, gz), (1.6, 2.6, 2.2), GUN_L)
@@ -993,7 +1047,7 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_ex
         tadd((4.0, -3.7, gz), (2.4, 1.4, 1.8), GUN)
         tadd((8.0, 1.8, gz - 1.0), (4.0, 0.7, 0.7), GUN)
         muzzle_x = 7.4 + length + 1.0
-    elif gun == "cannon_120":   # 120mm smoothbore: thick barrel, fume extractor, thermal sleeve bands
+    else:                         # 120mm smoothbore: thick barrel, fume extractor, thermal sleeve bands
         tadd((6.8, 0, gz), (1.8, 4.0, 3.0), GUN_L)
         length, th = 13, 2.0
         tcyl((7.4 + length / 2 + r, 0, gz), th / 2, length, GUN, bar, n=12)
@@ -1002,27 +1056,114 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_ex
         for k in (0.25, 0.7, 0.85):
             tcyl((7.4 + length * k + r, 0, gz), (th + 0.3) / 2, 0.4, GUN_L, bar, n=12)
         muzzle_x = 7.4 + length
-    else:               # 155mm artillery: long raised barrel, double-baffle brake, recuperators, bustle
-        tadd((6.8, 0, gz), (2.2, 4.8, 3.4), GUN_L)
-        length, th = 19, 2.8
-        tcyl((7.4 + length / 2 + r, 0, gz), th / 2, length, GUN, bar, n=12)
-        tcyl((7.4 + length * 0.35 + r, 0, gz), (th + 1.0) / 2, 3.0, GUN, bar, n=12)
-        for s in (0.9, -0.9):
-            tcyl((9.6 + r, s, gz + th / 2 + 0.5), 0.42, 5.0, GUN_L, bar, n=8)
-        for dx in (0.6, 2.2):
-            tadd((7.4 + length + dx + r, 0, gz), (1.0, th + 2.2, th + 1.0), GUN, bar)
-        tadd((-9.4, 0, 13.4), (4.4, 8.6, 3.6), T)                       # turret bustle
-        muzzle_x = 7.4 + length + 2.8
     muzzle = (muzzle_x + r, 0, gz)
     if elev:
         muzzle = _rotate(muzzle, "pitch", elev, pivot)
     if flash:
         a = math.radians(elev)
         fx, fz = math.cos(a), math.sin(a)
-        size = {"bushmaster": 2.0, "cannon_120": 3.2}.get(gun, 4.0)
+        size = 2.0 if gun == "bushmaster" else 3.2
         tadd((muzzle[0] + fx * size / 2, 0, muzzle[2] + fz * size / 2), (size, size, size), FLASH_Y, glow=True)
         tadd((muzzle[0] + fx * 0.8, 0, muzzle[2] + fz * 0.8), (size * 0.6,) * 3, FLASH_W, glow=True)
     return B, _rotate(muzzle, "yaw", turret, TANK_PIVOT), gear
+
+
+def _phase(d, a, b):
+    """How far (0..1, eased) a deployment step running from d=a to d=b has got at d."""
+    t = max(0.0, min(1.0, (d - a) / (b - a)))
+    return t * t * (3 - 2 * t)
+
+
+ART_PIVOT = (1.6, 0, 15.4)      # the 155mm's trunnions
+ART_ELEV = 42                   # its firing elevation, degrees (0 = lying on the travel lock)
+SPADE_HINGE = (-14.2, 6.0)      # rear spades' hinge (x, z), low on the back plate
+SPADE_ARM = 7.4                 # hinge to blade
+SPADE_DUG, SPADE_UP = -35, -180  # arm angle from hanging straight down: dug in / folded up
+
+
+def _artillery(B, tc, hull, recoil, flash, wreck, d, elev_extra):
+    """The 155mm self-propelled gun: an open-topped gun house with a front shield, the barrel
+    resting on a travel lock. Deploying (d 0..1) lowers the rear spades and side jacks, folds the
+    travel lock away and raises the barrel. Returns the muzzle point."""
+    add, cyl, _ = _adders(B)
+    T, Td = tc["T"], tc["Td"]
+    dig, lock, lift = _phase(d, 0.0, 0.5), _phase(d, 0.3, 0.6), _phase(d, 0.5, 1.0)
+
+    # Rear spades: folded up against the back plate when travelling, dug in behind when deployed.
+    hx, hz = SPADE_HINGE
+    swing = SPADE_UP + (SPADE_DUG - SPADE_UP) * dig
+    for s in (1, -1):
+        y = s * 4.2
+        arm = (("pitch", swing, (hx, y, hz)),)
+        add((hx, y, hz - SPADE_ARM / 2), (1.2, 1.2, SPADE_ARM), GUN_L, arm)          # arm
+        add((hx - 0.4, y, hz - SPADE_ARM), (1.0, 4.2, 2.4), GUN, arm)               # spade
+        add((hx - 0.95, y, hz - SPADE_ARM - 0.3), (0.15, 3.8, 1.6), METAL_L, arm)   # its worn edge
+        cyl((hx, y, hz), 0.8, 1.6, "y", METAL_D, n=8)                               # hinge
+    # Side jacks: hydraulic legs that push pads down onto the sand either side of the tracks.
+    for s in (1, -1):
+        y = s * 9.3
+        foot = 6.2 - 5.9 * dig
+        add((-4.0, y, 10.4), (2.4, 1.4, 1.4), GUN)                                   # housing on the fender
+        cyl((-4.0, y, (10.0 + foot) / 2), 0.45, 10.0 - foot, "z", METAL_L, n=8)     # ram
+        add((-4.0, y, foot), (2.8, 2.4, 0.5), GUN_L)                                 # pad
+    # Travel lock: an A-frame on the front deck the barrel rests in; it folds flat forwards.
+    tl = (("pitch", -85 * lock, (12.0, 0, 9.6)),)
+    for s in (1, -1):
+        add((12.0, s * 1.3, 12.4), (0.6, 0.6, 5.6), GUN_L, (("roll", -s * 12, (12.0, s * 1.3, 9.6)),) + tl)
+    add((12.0, 0, 15.0), (1.2, 3.4, 0.7), GUN, tl)                                    # the cradle
+
+    # Gun house: open-topped armoured walls in the team colour, a sloped shield at the front.
+    add((-2.0, 0, 11.0), (17.0, 10.6, 0.5), shade(hull, 0.8))                         # floor
+    for s in (1, -1):
+        add((-2.0, s * 5.2, 13.4), (17.0, 0.6, 4.4), T)                              # side walls
+        add((-2.0, s * 5.55, 15.5), (17.0, 0.15, 0.3), shade(T, 1.2))                 # their top lip
+        add((-2.0, s * 5.55, 12.2), (16.6, 0.12, 0.5), Td)                           # team stripe
+        for x in (-8.0, -2.0, 4.0):
+            add((x, s * 5.55, 13.6), (0.4, 0.1, 0.4), METAL_L)                       # rivets
+    add((-10.4, 0, 12.8), (0.6, 10.6, 3.2), T)                                        # low rear wall
+    shield = (("pitch", 18, (6.6, 0, 11.0)),)
+    add((6.6, 0, 14.4), (0.9, 11.4, 6.6), T, shield)                                 # front gun shield
+    add((7.1, 0, 17.4), (0.2, 11.0, 0.4), shade(T, 1.2), shield)
+    for s in (1, -1):
+        add((7.1, s * 3.6, 13.0), (0.15, 2.2, 3.2), Td, shield)                      # shield panels
+    # Inside: ready rounds in a rack on the rear wall, a seat, the gun's pedestal and sight.
+    for k in range(6):
+        y = -3.75 + k * 1.5
+        cyl((-9.4, y, 13.0), 0.6, 3.6, "z", (176, 140, 60), n=8)                      # brass cases
+        cyl((-9.4, y, 15.2), 0.5, 0.9, "z", OLIVE_D, n=8)                             # shell noses
+    add((-4.6, 3.0, 12.2), (2.0, 2.0, 0.6), BROWN_D)                                  # gunner's seat
+    add((-5.4, 3.0, 13.4), (0.5, 2.0, 2.4), BROWN_D)
+    add((1.6, 0, 13.2), (1.6, 3.0, 4.2), GUN)                                         # pedestal
+    add((-4.0, -3.6, 14.2), (1.6, 1.2, 1.2), GUN_L)                                   # sight box
+    add((-3.15, -3.6, 14.3), (0.15, 0.8, 0.5), CYAN, glow=True)
+
+    # The gun: cradle, recuperators, long barrel with a double-baffle brake, breech behind.
+    elev = -6 if wreck else (ART_ELEV + elev_extra) * lift
+    bar = (("pitch", elev, ART_PIVOT),)
+    r = -recoil * 1.6
+    px, _, pz = ART_PIVOT
+    length, th = 20.0, 2.6
+    add((px, 0, pz), (4.0, 3.6, 3.0), GUN_L, bar)                                     # cradle
+    for s in (1, -1):
+        cyl((px, s * 2.0, pz), 0.9, 0.8, "y", METAL_D, n=8)                          # trunnions
+    for zz in (pz + 1.9, pz - 1.6):
+        cyl((px + 4.0 + r * 0.3, 0, zz), 0.5, 6.0, "x", METAL_L, bar, n=8)           # recuperators
+    add((px - 3.2 + r, 0, pz), (2.8, 2.8, 2.6), GUN, bar)                             # breech block
+    add((px - 4.7 + r, 0, pz), (0.3, 1.6, 1.6), METAL_D, bar)
+    cyl((px + 2 + length / 2 + r, 0, pz), th / 2, length, "x", GUN, bar, n=12)        # barrel
+    cyl((px + 2 + length * 0.55 + r, 0, pz), th / 2 + 0.45, 2.4, "x", GUN, bar, n=12)  # fume extractor
+    for dx in (0.6, 2.2):
+        add((px + 2 + length + dx + r, 0, pz), (1.0, th + 2.0, th + 0.8), GUN, bar)   # muzzle brake
+    muzzle = _rotate((px + 2 + length + 2.8 + r, 0, pz), "pitch", elev, ART_PIVOT)
+    if flash:
+        a = math.radians(elev)
+        fx, fz = math.cos(a), math.sin(a)
+        mx, _, mz = muzzle
+        add((mx + fx * 2.2, 0, mz + fz * 2.2), (4.4, 4.4, 4.4), FLASH_Y, glow=True)
+        add((mx + fx * 0.8, 0, mz + fz * 0.8), (2.6, 2.6, 2.6), FLASH_W, glow=True)
+        for s in (1, -1):   # flame jets out of the brake's side ports
+            add((mx - fx * 2.0, s * 3.2, mz - fz * 2.0), (2.0, 2.4, 1.6), FLASH_Y, glow=True)
+    return muzzle
 
 
 JEEP_PIVOT = (-4.8, 0, 0)    # the pintle the rear weapon and its gunner swivel on

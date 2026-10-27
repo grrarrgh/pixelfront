@@ -8,7 +8,7 @@ from .modules import slots_for, tiers, default_loadout, loadout_summary
 
 log = logging.getLogger(__name__)
 
-ARMY_MIX = {"barracks": [("rifleman", 5), ("heavy", 2), ("medic", 1)],
+ARMY_MIX = {"barracks": [("rifleman", 5), ("heavy", 2), ("antiarmor", 2), ("medic", 1)],
             "yard": [("jeep", 2), ("tank", 3)]}
 
 # Difficulty. The AI is deliberately a bit slow and a bit dim:

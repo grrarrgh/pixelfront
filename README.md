@@ -57,7 +57,8 @@ Destroy every enemy building to win. Lose all of yours and it's over.
   picks it up. Right-click a foundation with more engineers to speed it up. A site shows red if
   it's within a tile of another building.
 - **Command Center** trains **Engineers**, who build, repair buildings and vehicles, and capture.
-- **Barracks** trains **Riflemen**, **Medics** (heal infantry they touch) and **Heavy Infantry** (armoured heavy weapons team).
+- **Barracks** trains **Riflemen**, **Medics** (heal infantry they touch), **Heavy Infantry** (armoured heavy weapons team)
+  and **Anti-Armor** soldiers (grenades and missiles for cracking vehicles).
 - **Vehicle Yard** builds **Jeeps** (fast, mounted weapon) and **Tanks** (armoured, big gun). Their weapons sit in turrets that traverse independently of the hull.
 
 ### Unit design
@@ -78,12 +79,20 @@ Some units' weapon tiers are real, distinct weapons:
 | --- | --- | --- | --- |
 | Rifleman | Pistol | Rifle | Machine gun |
 | Heavy Infantry | M60 | Grenade launcher | Shoulder rocket launcher |
+| Anti-Armor | Rifle with underbarrel grenade launcher (a grenade every 9s) | 6-round automatic grenade launcher | Javelin missile: arcs onto its target, wrecks vehicles |
 | Jeep | M2 Browning | UAG-40 automatic grenade launcher | Twin wire-guided missiles |
-| Tank | Bushmaster II 30mm autocannon | 120mm cannon | 155mm artillery (fixed gun: the tank turns to aim) |
+| Tank | Bushmaster II 30mm autocannon | 120mm cannon | 155mm self-propelled gun (must deploy to fire) |
 
 For medics and engineers the weapon slot is the bag they carry: satchel, kit case or backpack.
 Heavy infantry armour runs from helmet and body armour (Light) to full body armour (Medium) to
-full body armour plus a ballistic shield (Heavy). Heavy infantry kneel before they fire.
+full body armour plus a ballistic shield (Heavy). Heavy infantry and anti-armour soldiers kneel
+before they fire. Anti-armour soldiers with a Javelin go for vehicles first.
+
+**155mm self-propelled gun:** the tank's Heavy weapon swaps the turret for an open-topped gun
+house with a long howitzer. It turns to face its target, then takes 2 seconds to deploy: spades
+drop at the rear, jacks push down at the sides, the travel lock folds away and the barrel rises.
+Once dug in it can only fire within a narrow arc. To turn further, or to move, it packs up
+again first (another 2 seconds, done automatically).
 
 Units are trained with the design that was current when you queued them, and look the part:
 
@@ -91,7 +100,8 @@ Units are trained with the design that was current when you queued them, and loo
   helmet and body armour, Heavy = adds shoulder, elbow and knee plates.
 - **Vehicle armour:** more plating, same size.
 - **Vehicle speed:** Fast = wheels, Normal = half-tracks, Slow = full tracks. Front wheels steer into turns.
-- **Markings:** medics carry red crosses on white patches, engineers yellow and grey shoulder patches.
+- **Markings:** medics carry red crosses on white patches, engineers yellow and grey shoulder
+  patches, anti-armour soldiers orange patches with a black bar and spare rounds on their back.
 
 ### High ground
 
@@ -106,9 +116,9 @@ Every weapon is one of three types:
 
 | Type | Weapons | Behaviour |
 | --- | --- | --- |
-| Bullets | Pistol, rifle, M60, M2 | Instant hits. Every round pins down the soldier it's aimed at. Moderate damage to jeeps, weak against tanks and buildings. |
-| Explosives | Grenade launcher, UAG-40, Bushmaster, 155mm | Splash damage. Pins down all infantry near the blast. Heavy damage to tanks and buildings. |
-| Anti-armour | Rocket launcher, TOW, 120mm | Big hits with a bonus against vehicles, and a small blast. |
+| Bullets | Pistol, rifle, M60, M2 | Instant hits. Every round pins down the soldier it's aimed at. Moderate damage to jeeps, weak against tanks and buildings. Bursts spray out in a cone, and misses fly on past the target. |
+| Explosives | Grenade launchers (incl. underbarrel and 6-round automatic), UAG-40, Bushmaster, 155mm | Splash damage. Pins down all infantry near the blast. Heavy damage to tanks and buildings. |
+| Anti-armour | Rocket launcher, Javelin, TOW, 120mm | Big hits with a bonus against vehicles, and a small blast. |
 
 Armour ranks cut the damage each type does. Infantry go from unarmoured, to helmet and vest, to
 full body armour, to full body armour plus a ballistic shield. The shield stops about half of
@@ -148,6 +158,7 @@ Medics and engineers have to be touching whoever or whatever they heal, repair o
   front of the formation where the group stops.
 - Medics and engineers take the back. On an attack or attack-move they follow the nearest
   fighter instead of walking point, and medics stop to patch up the wounded on the way.
+- Soldiers on the move walk around soldiers standing still instead of shoving through them.
 
 ### Test range and motion test
 

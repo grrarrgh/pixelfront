@@ -8,7 +8,7 @@ import random
 
 import pygame
 
-from .config import SCREEN_W, PLAYER, ENEMY, KNEEL_TIME, STEER_MAX, RES
+from .config import SCREEN_W, SCREEN_H, PLAYER, ENEMY, KNEEL_TIME, STEER_MAX, RES
 from .units import UNITS
 from .font import draw_text
 from .modules import SLOTS, TIER_NAMES, weapon_of, slots_for, tiers, tier, slot_label, default_loadout, compute_stats
@@ -19,19 +19,20 @@ from .weapons import weapon as weapon_def, PROJECTILE_STYLES
 KINDS = list(UNITS)
 COLUMNS = ("Turning", "Moving", "Attacking", "Pinned / Turret", "Dying")
 KNEEL_CYCLE = 4.0            # heavy infantry: kneel, fire for a while, stand up, repeat
+DEPLOY_CYCLE = 9.0           # artillery: dig in, fire for a while, pack up, repeat
 LABEL_W = 80
-CELL_W, CELL_H = 112, 56     # on-screen cell size
 TOP = 24
+CELL_W, CELL_H = 112, (SCREEN_H - TOP) // len(KINDS)   # on-screen cell size: every row fits
 DIE_CYCLE = 3.2              # seconds: stand, die, lie there, repeat
 SLOT_KEYS = {pygame.K_1: "armor", pygame.K_2: "weapon", pygame.K_3: "engine"}
 SAND, SAND_D = (220, 186, 124), (204, 168, 108)
 
 
 class Stage:
-    """Staging area for one row, in game pixels: infantry get a smaller stage shown at 4x."""
+    """Staging area for one row, in game pixels: infantry get a smaller stage shown magnified."""
 
     def __init__(self, kind):
-        self.zoom = 4 if UNITS[kind]["cls"] == "infantry" else 2
+        self.zoom = 3 if UNITS[kind]["cls"] == "infantry" else 2
         self.w, self.h = CELL_W // self.zoom, CELL_H // self.zoom
         self.ground = self.h - 3
         self.speed = 1.0 / self.zoom * 2   # world px per stage px, so units cross cells at a similar pace
@@ -169,7 +170,22 @@ class MotionTest:
             return "idle", 0
         return "kfire", None
 
+    def deploys(self, kind):
+        return weapon_def(weapon_of(kind, self.loadout(kind)))["deploy"] if UNITS[kind]["weapon"] else 0
+
+    def deploy_state(self, kind):
+        """(anim, frame) for artillery in the attack column: dig in, fire, pack up, repeat."""
+        t = self.deploys(kind)
+        p = self.t % DEPLOY_CYCLE
+        if p < t:
+            return "deploy", min(3, int(p / t * 4))
+        if p > DEPLOY_CYCLE - t:
+            return "deploy", min(3, int((DEPLOY_CYCLE - p) / t * 4))
+        return "dfire", None
+
     def ready_to_fire(self, kind):
+        if self.deploys(kind):
+            return self.deploy_state(kind)[0] == "dfire"
         return not UNITS[kind].get("kneels") or self.kneel_state()[0] == "kfire"
 
     def target_pos(self, kind):
@@ -182,7 +198,7 @@ class MotionTest:
             self.burst(c, x + 6, S.ground - 3, (130, 240, 130), 3, 6)
             return
         kneel = UNITS[kind].get("kneels") and not prone
-        dx, dy = muzzle_offset(kind, self.loadout(kind), facing, prone, 0.0, kneel)
+        dx, dy = muzzle_offset(kind, self.loadout(kind), facing, prone, 0.0, kneel, bool(self.deploys(kind)))
         sx, sy = x + dx, S.ground + dy
         hit = self.rng.random() < st["accuracy"]
         tx, ty = self.target_pos(kind)
@@ -279,7 +295,12 @@ class MotionTest:
                 self.blit_unit(cell, kind, lo, "work", int(c["lunge"] > 0.05), 0, sx)
             else:
                 self.draw_dummy(cell, kind)
-                anim, i = ("fire", None) if not UNITS[kind].get("kneels") else self.kneel_state()
+                if self.deploys(kind):
+                    anim, i = self.deploy_state(kind)
+                elif UNITS[kind].get("kneels"):
+                    anim, i = self.kneel_state()
+                else:
+                    anim, i = "fire", None
                 if i is None:
                     i = int(c["lunge"] > 0.05)
                 self.blit_unit(cell, kind, lo, anim, i, 0, sx)
@@ -288,7 +309,7 @@ class MotionTest:
             if not infantry:                          # vehicles: the turret traverses instead
                 if weapon_def(weapon_of(kind, lo))["fixed"]:
                     self.blit_unit(cell, kind, lo, "idlegun", int(self.t * 2.0), 0, mid)
-                    draw_text(cell, "fixed gun", mid * k, 2 * k, (120, 80, 50), shadow=None, scale=k,
+                    draw_text(cell, "dug in", mid * k, 2 * k, (120, 80, 50), shadow=None, scale=k,
                               align="center")
                 else:
                     spr = self.sp.unit(kind, self.team, lo)

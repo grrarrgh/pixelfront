@@ -9,7 +9,7 @@ from .config import TILE, VIEW_W, VIEW_H, PLAYER, NEUTRAL, BUILDINGS, TEAM_COLOR
 from . import model3d as m3
 from .units import UNITS
 from .game import BOOM_TIME as SHOT_BOOM_TIME
-from .sprites import K, render_terrain, unit_anim, death_frame, DEATH_STEPS, silhouette
+from .sprites import K, render_terrain, unit_anim, death_frame, DEATH_STEPS, silhouette, shade
 from .entities import PING_TIME
 from .controller import MARKER_TIME
 
@@ -35,34 +35,25 @@ def draw_shadow(surf, x, y, r, prone=False, k=RES):
     surf.blit(sh, (x - w // 2, y))
 
 
-TRACER_DASH, TRACER_GAP = 3, 3   # game px: bullet trails read as "- - - -", not a solid beam
-
-
-TRACER_DRIFT = 1.5   # game px: dashes wander up to this far off the line, more towards the far end
+TRACER_STREAK = 5    # game px: the bright head of a round in flight
+TRACER_TAIL = 7      # game px: the faint trail behind it
 
 
 def draw_tracer(surf, x1, y1, x2, y2, age=0.0, seed=0.0, color=(255, 240, 170), k=RES):
-    """A dashed bullet trail from (x1, y1) to (x2, y2) (screen px). The dashes slide towards
-    the target as the tracer ages, so a burst reads as rounds in flight, and drift a little to
-    either side (more the further they get) so rounds look like they spread rather than run on
-    rails. `seed` keeps one tracer's drift steady from frame to frame."""
+    """One round in flight from (x1, y1) to (x2, y2) (screen px): a short bright streak with a
+    fading tail, travelling the whole way over the tracer's life. Rounds in a burst each take
+    their own line (see weapons.SPRAY_CONE), so they read as a spray rather than one beam.
+    `seed` is unused; it keeps the tracer record format."""
     dx, dy = x2 - x1, y2 - y1
     length = (dx * dx + dy * dy) ** 0.5
     if length < 1:
         return
     ux, uy = dx / length, dy / length
-    nx, ny = -uy, ux   # sideways
-    dash, period = TRACER_DASH * k, (TRACER_DASH + TRACER_GAP) * k
-    d = (age / TRACER_LIFE) * period % period
-    i = 0
-    while d < length:
-        e = min(length, d + dash)
-        side = math.sin(seed * 997.0 + i * 2.3) * TRACER_DRIFT * k * (d / length)
-        ox, oy = nx * side, ny * side
-        pygame.draw.line(surf, color, (round(x1 + ux * d + ox), round(y1 + uy * d + oy)),
-                         (round(x1 + ux * (e - 1) + ox), round(y1 + uy * (e - 1) + oy)))
-        d += period
-        i += 1
+    head = min(length, (age / TRACER_LIFE + 0.15) * length)
+    at = lambda d: (round(x1 + ux * d), round(y1 + uy * d))
+    tail = max(0.0, head - TRACER_STREAK * k)
+    pygame.draw.line(surf, shade(color, 0.62), at(max(0.0, tail - TRACER_TAIL * k)), at(tail))
+    pygame.draw.line(surf, color, at(tail), at(head))
 
 
 FLAG_W, FLAG_H, POLE_H = 8, 5, 11      # game px

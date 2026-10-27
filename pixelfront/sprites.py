@@ -64,7 +64,7 @@ FACINGS = {"infantry": 8, "vehicle": 16}
 # Animation -> frame count. Infantry "prone"/"pfire" are the pinned-down crawl and prone firing.
 FRAMES = {
     "infantry": dict(idle=4, walk=4, fire=2, work=2, prone=2, pfire=2, kneel=2, kfire=2, die=4, check=2),
-    "vehicle": dict(idle=2, walk=3, fire=2, die=1, idlegun=len(m3.IDLE_ELEV)),
+    "vehicle": dict(idle=2, walk=3, fire=2, die=1, idlegun=len(m3.IDLE_ELEV), deploy=4, dfire=2),
 }
 DEATH_STEPS = (0.08, 0.18, 0.3)   # seconds at which each infantry death frame ends
 WALK_RATE = {"infantry": 8.0, "vehicle": 10.0}  # frames per second at the unit's base speed
@@ -78,6 +78,15 @@ def unit_anim(u):
         if busy and u.order == "attack":
             return "pfire", int(firing)
         return "prone", int(u.anim * 4) % 2 if u.moving else 0
+    if u.deploy_time:   # artillery: digging in / packing up, firing and idling dug in
+        if 0 < u.deploy < 1:
+            return "deploy", min(3, int(u.deploy * 4))
+        if u.deploy >= 1:
+            if busy:
+                return "dfire", int(firing)
+            return "idlegun", int((u.idle_t + u.id * 0.7) * 2.0) % len(m3.IDLE_ELEV)
+        if busy:
+            return "idle", int(u.idle_t * 10) % 2   # still turning to face the target
     if u.kneeling:
         if u.kneel < KNEEL_TIME:
             return "kneel", int(u.kneel >= KNEEL_TIME / 2)
@@ -87,11 +96,9 @@ def unit_anim(u):
     if u.moving:
         return "walk", int(u.anim * WALK_RATE["vehicle" if u.is_vehicle else "infantry"])
     # Idle: soldiers breathe slowly (and now and then check their weapon), vehicles shake with
-    # the engine running; a fixed gun slowly raises and lowers its barrel instead of turning a
-    # turret. The unit id offsets the cycle so a squad doesn't breathe in unison.
+    # the engine running (dug-in artillery nods its barrel, above). The unit id offsets the cycle
+    # so a squad doesn't breathe in unison.
     if u.is_vehicle:
-        if u.armed and not u.has_turret:
-            return "idlegun", int((u.idle_t + u.id * 0.7) * 2.0) % len(m3.IDLE_ELEV)
         return "idle", int(u.idle_t * 10) % 2
     if u.check_t > 0:
         return "check", int(u.check_t * 2.5) % 2
@@ -123,9 +130,13 @@ def _render_unit(kind, light, lo, anim, i, facing, turret=0.0, steer=0.0):
         elif anim == "die":
             b, _ = build(light, lo, wreck=True, turret=turret)
             darken = 0.4
-        elif anim == "idlegun":   # fixed gun nodding its barrel up and down
+        elif anim == "idlegun":   # dug-in artillery nodding its barrel up and down
             b, _ = build(light, lo, turret=turret, steer=steer, shake=m3.IDLE_SHAKE[i % len(m3.IDLE_SHAKE)],
-                         elev=m3.IDLE_ELEV[i])
+                         elev=m3.IDLE_ELEV[i], deploy=1.0)
+        elif anim == "deploy":    # artillery part way between travelling and dug in
+            b, _ = build(light, lo, turret=turret, deploy=(i + 1) / 5)
+        elif anim == "dfire":
+            b, _ = build(light, lo, recoil=1.5 if i else 0, flash=bool(i), turret=turret, deploy=1.0)
         else:
             b, _ = build(light, lo, turret=turret, steer=steer, shake=m3.IDLE_SHAKE[i % len(m3.IDLE_SHAKE)])
         return m3.render(b, facing, darken=darken, scale=RES, edges=VEH_EDGES)
@@ -184,18 +195,21 @@ class UnitSprite:
 _muzzles = {}
 
 
-def muzzle_offset(kind, loadout, angle, prone=False, turret=0.0, kneel=False):
+def muzzle_offset(kind, loadout, angle, prone=False, turret=0.0, kneel=False, deployed=False):
     """Screen offset from a unit's position to its gun muzzle at this facing (and, for
-    vehicles, this turret angle relative to the hull)."""
+    vehicles, this turret angle relative to the hull, and whether artillery is dug in)."""
     vehicle = UNITS[kind]["cls"] == "vehicle"
     n = FACINGS["vehicle" if vehicle else "infantry"]
     step = 360 / n
     tq = round(turret / step) * step if vehicle else 0.0
-    key = (kind, tuple(sorted(loadout.items())), prone, kneel, tq)
+    key = (kind, tuple(sorted(loadout.items())), prone, kneel, tq, deployed)
     point = _muzzles.get(key)
     if point is None:
         if vehicle:
-            _, mz = (m3.tank if kind == "tank" else m3.jeep)((0, 0, 0), loadout, turret=tq)
+            if kind == "tank":
+                _, mz = m3.tank((0, 0, 0), loadout, turret=tq, deploy=1.0 if deployed else 0.0)
+            else:
+                _, mz = m3.jeep((0, 0, 0), loadout, turret=tq)
         else:
             anim = "pfire" if prone else "kfire" if kneel else "fire"
             _, mz, _, _ = m3.soldier(kind, (0, 0, 0), loadout, anim, 0)
