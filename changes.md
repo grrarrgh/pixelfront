@@ -2,6 +2,23 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.15.1 "Mirror Image" (2026-10-27)
+
+Turrets aim where they're drawn, and maps can be rebuilt exactly outside Python.
+
+### Fixed
+
+- **Vehicle turrets were drawn mirrored.** The game turns turrets clockwise on screen, but the
+  models turn them anticlockwise, so a turret aiming to the right of its hull was drawn aiming
+  to the left, and shots left from the wrong side. Tank turrets, the jeep's weapon station and
+  the dug-in 155mm's gun house now point at what they're shooting (steering already did this).
+
+### Changed
+
+- **The map generator visits cliff tiles in a fixed order** (sorted, instead of Python's set
+  order), so the same seed gives the same map in the Unity port. A given seed now makes a
+  slightly different map than before.
+
 ## 0.15.0 "Hold the Line" (2026-10-27)
 
 Deploy orders and a traversing gun house for the 155mm, sharper aim, new rifleman weapons,

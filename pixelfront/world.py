@@ -277,7 +277,8 @@ def _xy(i, w):
 
 
 def _ring(cells, w, h):
-    """Tiles bordering a set of cells (where its cliff face and ramps are)."""
+    """Tiles bordering a set of cells (where its cliff face and ramps are), as sorted tile
+    indices: a fixed order, so other ports of the generator (the C# one) can match it."""
     out = set()
     for j in cells:
         x, y = j % w, j // w
@@ -285,7 +286,7 @@ def _ring(cells, w, h):
             nx, ny = x + dx, y + dy
             if 0 <= nx < w and 0 <= ny < h:
                 out.add(ny * w + nx)
-    return out
+    return sorted(out)
 
 
 def _ramp_spots(world, comp, cid, cells):

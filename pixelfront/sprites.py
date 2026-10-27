@@ -136,6 +136,9 @@ BLD_EDGES = 0.62   # ... and buildings more so
 
 
 def _render_unit(kind, light, lo, anim, i, facing, turret=0.0, steer=0.0):
+    # Game angles (facing, turret) turn clockwise on screen; the models' yaw turns left
+    # (anticlockwise), so the turret's angle is flipped on the way in, as steering already is.
+    turret = -turret
     if UNITS[kind]["cls"] == "vehicle":
         build = m3.tank if kind == "tank" else m3.jeep
         darken = 1.0
@@ -226,9 +229,9 @@ def muzzle_offset(kind, loadout, angle, prone=False, turret=0.0, kneel=False, de
     if point is None:
         if vehicle:
             if kind == "tank":
-                _, mz = m3.tank((0, 0, 0), loadout, turret=tq, deploy=1.0 if deployed else 0.0)
+                _, mz = m3.tank((0, 0, 0), loadout, turret=-tq, deploy=1.0 if deployed else 0.0)
             else:
-                _, mz = m3.jeep((0, 0, 0), loadout, turret=tq)
+                _, mz = m3.jeep((0, 0, 0), loadout, turret=-tq)
         else:
             anim = "pfire" if prone else "kfire" if kneel else "fire"
             _, mz, _, _ = m3.soldier(kind, (0, 0, 0), loadout, anim, 0)
