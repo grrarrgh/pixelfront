@@ -9,7 +9,11 @@ from .config import TILE, VIEW_W, VIEW_H, PLAYER, NEUTRAL, BUILDINGS, TEAM_COLOR
 from . import model3d as m3
 from .units import UNITS
 from .game import BOOM_TIME as SHOT_BOOM_TIME
-from .sprites import K, render_terrain, unit_anim, death_frame, DEATH_STEPS
+from .sprites import K, render_terrain, unit_anim, death_frame, DEATH_STEPS, silhouette
+from .entities import PING_TIME
+from .controller import MARKER_TIME
+
+PING_ALPHA = 80      # peak opacity of a structure's acknowledgement flash (a damage flash is 255)
 
 SEL_COLORS = {PLAYER: (90, 230, 90), NEUTRAL: (240, 220, 90)}
 ENEMY_SEL = (235, 70, 60)
@@ -142,6 +146,36 @@ def draw_explosion(surf, x, y, frac, r, k=RES):
     pygame.draw.circle(surf, (255, 220, 120), (x, y), max(1, int(rad * (1 - frac))))
     if frac < 0.3:
         pygame.draw.circle(surf, (255, 255, 240), (x, y), max(1, int(rad * 0.4)))
+
+
+def draw_marker(surf, x, y, frac, color, k=RES):
+    """A click on the ground: a ring that snaps in onto the spot while a fainter ripple spreads
+    out and fades. `frac` runs 0..1 over the marker's life. Rings are flattened to lie on the ground."""
+    ease = 1 - (1 - frac) ** 2
+    size = 20 * k
+    ring = pygame.Surface((size * 2, size), pygame.SRCALPHA)
+    cx, cy = size, size // 2
+
+    def oval(r, alpha, width):
+        if r >= 1:
+            rect = pygame.Rect(0, 0, int(r * 2), max(2, int(r * 1.2)))
+            rect.center = (cx, cy)
+            pygame.draw.ellipse(ring, color + (alpha,), rect, width)
+
+    oval((12 - 9 * ease) * k, 255, k)                    # snaps in
+    oval((5 + 13 * ease) * k, int(200 * (1 - frac)), k)   # ripples out
+    if frac < 0.6:
+        pygame.draw.circle(ring, color + (255,), (cx, cy), k)   # the spot itself
+    surf.blit(ring, (x - cx, y - cy))
+
+
+def draw_ping(surf, sil, pos, left):
+    """A structure's soft acknowledgement flash: its silhouette fades in and out once, at low
+    opacity so it reads as a glint rather than the white of a hit."""
+    f = 1 - left / PING_TIME
+    img = sil.copy()
+    img.set_alpha(int(PING_ALPHA * math.sin(math.pi * f)))
+    surf.blit(img, pos)
 
 
 def draw_death(surf, sprites, d, age, x, y, k=RES):
@@ -278,10 +312,7 @@ class Renderer:
                 pygame.draw.rect(view, (90, 230, 90), (rx + 1, ry - 10 * k, 5 * k, 4 * k))
 
         for m in ctrl.markers:
-            f = 1 - m[2] / 0.5
-            r = int((2 + 6 * f) * k)
-            x, y = at(m[0], m[1])
-            pygame.draw.rect(view, m[3], (x - r, y - r // 2, r * 2, r), 1)
+            draw_marker(view, *at(m[0], m[1]), m[2] / MARKER_TIME, m[3], k)
 
         if ctrl.mode == "place":
             self.draw_ghost(view, ctrl, at)
@@ -340,6 +371,8 @@ class Renderer:
         x, y = at(p.x, p.y)
         img, (ox, oy) = self.sp.derrick(self.game.time)
         view.blit(img, (x - ox, y - oy))
+        if p.ping > 0:
+            draw_ping(view, silhouette(img), (x - ox, y - oy), p.ping)
         # Owner's flag on a pole in the middle of the pad, flying clear above the pump.
         draw_flag(view, x, y - 2 * k, team_color(p.team), self.game.time, p.id)
         capturing = p.progress < 1 and p.progress > 0
@@ -356,6 +389,8 @@ class Renderer:
         bx, by = x - ox, y - oy
         view.blit(img, (bx, by))
         if not e.complete:
+            if e.ping > 0:
+                draw_ping(view, silhouette(img), (bx, by), e.ping)
             return
         # Team flag on the roof at the back-right corner, waving.
         draw_flag(view, bx + img.get_width() - 12 * k, by + FLAG_ROOF.get(e.kind, 10) * k, team_color(e.team),
@@ -364,6 +399,8 @@ class Renderer:
             draw_garrison(view, e.kind, e.occupants, x, y, self.game.time, team_color(e.team))
         if e.flash > 0:
             view.blit(self.sp.building_flash(e.kind, e.team), (bx, by))
+        elif e.ping > 0:
+            draw_ping(view, self.sp.building_flash(e.kind, e.team), (bx, by), e.ping)
         frac = e.hp / e.max_hp
         if frac < 0.5:
             tm = self.game.time

@@ -60,6 +60,8 @@ class Unit(Entity):
         self.look_t = 0.0     # seconds until the next look-around
         self.check_t = 0.0
         self.armed = self.damage > 0 and self.weapon is not None
+        # Front-line troops; medics and engineers (even with a sidearm) hang back in a group.
+        self.fighter = self.armed and not self.heal and not self.work
 
         self.order = "idle"
         self.path = []
@@ -67,6 +69,9 @@ class Unit(Entity):
         self.target = None
         self.amove_dest = None
         self.build_plan = None   # (kind, tx, ty), credits already paid
+        self.group_speed = None  # px/s pace of the group this unit was ordered to move with
+        self.convoy = None       # dict(hx, hy, vehicles) when moving with vehicles that must lead
+        self.hold_t = 0.0        # seconds spent waiting for the convoy's vehicles to pass
         self.timer = 0.0
 
         self.cooldown = 0.0
@@ -112,7 +117,35 @@ class Unit(Entity):
 
     @property
     def move_speed(self):
-        return self.speed * (PRONE_SPEED if self.suppressed else 1.0)
+        speed = self.speed
+        if self.group_speed and self.order in ("move", "amove"):
+            speed = min(speed, self.group_speed)   # keep pace with the group
+            if self.holding():
+                return 0.0
+        return speed * (PRONE_SPEED if self.suppressed else 1.0)
+
+    HOLD_GAP = TILE      # how far behind the convoy's rearmost vehicle soldiers keep
+    HOLD_MAX = 6.0       # give up waiting after this long (a vehicle stuck on something)
+
+    def holding(self):
+        """Soldiers moving with vehicles let them go first: a soldier ahead of the rearmost
+        vehicle still on its way waits for it to pass."""
+        c = self.convoy
+        if c is None or self.is_vehicle or self.hold_t >= self.HOLD_MAX:
+            return False
+        hx, hy = c["hx"], c["hy"]
+        rolling = [v.x * hx + v.y * hy for v in c["vehicles"]
+                   if v.alive and v.path and v.order in ("move", "amove")]
+        return bool(rolling) and self.x * hx + self.y * hy > min(rolling) - self.HOLD_GAP
+
+    def path_length(self):
+        """Pixels left to walk along the current path."""
+        dist, x, y = 0.0, self.x, self.y
+        for tx, ty in self.path:
+            gx, gy = tx * TILE + TILE / 2, ty * TILE + TILE / 2
+            dist += math.hypot(gx - x, gy - y)
+            x, y = gx, gy
+        return dist
 
     @property
     def kneeling(self):
@@ -229,7 +262,8 @@ class Unit(Entity):
             return "Going to build " + BUILDINGS[self.build_plan[0]]["name"]
         return {"idle": "Idle", "move": "Moving", "amove": "Attack-moving", "attack": "Attacking",
                 "heal": "Healing", "repair": "Repairing", "construct": "Building",
-                "assist": "Helping to build", "garrison": "Heading for the bunker"}[self.order]
+                "assist": "Helping to build", "garrison": "Heading for the bunker",
+                "escort": "Following"}[self.order]
 
     # ---- orders -----------------------------------------------------------
 
@@ -243,6 +277,9 @@ class Unit(Entity):
         self.target = None
         self.amove_dest = None
         self.assist = None
+        self.group_speed = None
+        self.convoy = None
+        self.hold_t = 0.0
         self.burst_left = 0
         self.repath = 0.0
 
@@ -292,6 +329,10 @@ class Unit(Entity):
     def order_garrison(self, game, bunker):
         self._order_target(game, "garrison", bunker)
 
+    def order_escort(self, game, leader):
+        """Medics and engineers sent along on an attack stay behind a fighter instead of leading."""
+        self._order_target(game, "escort", leader)
+
     def order_assist(self, game, kind, tx, ty):
         """Go and help another engineer put up a building at (tx, ty)."""
         self._reset(game)
@@ -338,10 +379,18 @@ class Unit(Entity):
                 self.path = []
                 return True
             tx, ty = self.path[0]
+        if len(self.path) > 1 and self.tile() == (tx, ty):
+            # Already on this waypoint's tile: head on for the next one. In a crowd moving at
+            # one pace, everyone can't stand on the tile's centre at once.
+            self.path.pop(0)
+            tx, ty = self.path[0]
         gx, gy = tx * TILE + TILE / 2, ty * TILE + TILE / 2
         dx, dy = gx - self.x, gy - self.y
         d = math.hypot(dx, dy)
         step = self.move_speed * dt
+        if step <= 0:
+            self.hold_t += dt   # waiting for the convoy's vehicles to go by
+            return False
         self.moving = True
         if self.is_vehicle:
             step *= self._drive(gx, gy, dt)
@@ -571,6 +620,24 @@ class Unit(Entity):
             self._target_gone(game)                # the builder gave up or died
             return
         self.follow(game, dt)                     # walk over and wait for the foundation
+
+    ESCORT_GAP = 1.5 * TILE   # how close behind its fighter an escort keeps
+
+    def do_escort(self, game, dt):
+        lead = self.target
+        if lead is None or not lead.alive or lead.inside:
+            self._target_gone(game)
+            return
+        if self.chase(game, lead, self.ESCORT_GAP, dt) and lead.order == "idle" and not lead.moving:
+            self._target_gone(game)   # the fight's over and the fighter has stopped: wait here
+            return
+        if self.heal:
+            self.scan -= dt
+            if self.scan <= 0:
+                self.scan = 0.4
+                patient = game.find_patient(self, self.sight * TILE)
+                if patient:
+                    self.order_heal(game, patient)   # patch them up, then stay put to help
 
     def do_heal(self, game, dt):
         t = self.target

@@ -62,8 +62,9 @@ Destroy every enemy building to win. Lose all of yours and it's over.
 
 ### Unit design
 
-Select a production building and press **E** to open the design popup. Each unit type has
-three module slots, and every choice has a trade-off:
+Select a production building and press **E** to open the design popup. Every factory keeps its
+own designs, so two Barracks can train differently equipped riflemen; new factories start on the
+defaults. Each unit type has three module slots, and every choice has a trade-off:
 
 | Slot | Light / Slow | Medium / Normal (default) | Heavy / Fast |
 | --- | --- | --- | --- |
@@ -139,6 +140,15 @@ While pinned they won't crawl towards enemies who are out of reach.
 
 Medics and engineers have to be touching whoever or whatever they heal, repair or build.
 
+### Moving as a group
+
+- A group moves at the pace of its slowest unit, so it arrives together. Units with further to
+  go speed up just enough to keep up.
+- Vehicles lead. Soldiers wait for any vehicle behind them to roll past, and vehicles take the
+  front of the formation where the group stops.
+- Medics and engineers take the back. On an attack or attack-move they follow the nearest
+  fighter instead of walking point, and medics stop to patch up the wounded on the way.
+
 ### Test range and motion test
 
 - **T** on the title screen: a sandbox with no AI, no fog, plenty of credits, a starter army, a
@@ -153,7 +163,7 @@ Medics and engineers have to be touching whoever or whatever they heal, repair o
 | Input | Action |
 | --- | --- |
 | Left click / drag | Select units (drag for a box) |
-| Shift + click | Add/remove from selection |
+| Shift + click | Add/remove from selection. Shift-click a selected unit in a mixed selection to keep only units of its type |
 | Double click, Ctrl + click | Select all units of that type on screen |
 | Right click | Smart command: move, attack, capture a derrick, heal (medic), build/repair (engineer). With a building selected: set rally point |
 | `1`-`9` | Build menu: place a building or train a unit (Shift+click places several) |

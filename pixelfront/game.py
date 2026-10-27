@@ -32,8 +32,6 @@ class Team:
         self.income = 0.0
         self.supply_used = 0
         self.supply_cap = SUPPLY_CAP
-        # The loadout each unit type is currently trained with.
-        self.designs = {kind: default_loadout(kind) for kind in UNITS}
 
 
 TEST_TARGETS = [  # (kind, loadout overrides) for the test range
@@ -465,18 +463,65 @@ class Game:
     # ---- commands ---------------------------------------------------------
 
     def command_move(self, units, tx, ty, attack=False):
-        spots = self.formation(tx, ty, len(units))
+        """Move a group into formation around (tx, ty): vehicles take the leading spots and the
+        medics and engineers the trailing ones, and everyone keeps to the slowest unit's pace. On an
+        attack, medics and engineers tag along behind a fighter instead of walking point."""
+        if not units:
+            return
+        if attack and self.send_escorts(units):
+            units = [u for u in units if u.fighter]
         cx, cy = tx * TILE + TILE / 2, ty * TILE + TILE / 2
-        ordered = sorted(units, key=lambda u: (u.x - cx) ** 2 + (u.y - cy) ** 2)
+        spots = self.formation(tx, ty, len(units))
+        # Which way the group is heading: spots furthest that way are the front of the formation.
+        hx = cx - sum(u.x for u in units) / len(units)
+        hy = cy - sum(u.y for u in units) / len(units)
+        heading = math.hypot(hx, hy)
+        if heading > TILE:
+            spots.sort(key=lambda s: -((s[0] * TILE - cx) * hx + (s[1] * TILE - cy) * hy))
+        rank = lambda u: 0 if u.is_vehicle else 1 if u.fighter else 2
+        ordered = sorted(units, key=lambda u: (rank(u), (u.x - cx) ** 2 + (u.y - cy) ** 2))
         for u, (sx, sy) in zip(ordered, spots):
             if attack:
                 u.order_amove(self, sx, sy)
             else:
                 u.order_move(self, sx, sy)
+        self.pace(units)
+        vehicles = [u for u in units if u.is_vehicle]
+        if vehicles and len(vehicles) < len(units) and heading > TILE:
+            # Vehicles lead: soldiers wait for any still behind them to roll past.
+            convoy = dict(hx=hx / heading, hy=hy / heading, vehicles=vehicles)
+            for u in units:
+                u.convoy = convoy
+
+    def send_escorts(self, units):
+        """Medics and engineers in an attacking group each follow the nearest fighter in it.
+        Returns False (and orders nobody) when the group has no fighters."""
+        fighters = [u for u in units if u.fighter]
+        if not fighters:
+            return False
+        for u in units:
+            if not u.fighter:
+                u.order_escort(self, min(fighters, key=lambda f: (f.x - u.x) ** 2 + (f.y - u.y) ** 2))
+        return True
+
+    def pace(self, units):
+        """Keep a moving group together: nobody goes faster than the slowest unit, except those
+        with further to go (vehicles heading for the front from the back), who go just fast
+        enough to arrive with the rest."""
+        if len(units) < 2:
+            return
+        slowest = min(u.speed for u in units)
+        eta = max(u.path_length() / u.speed for u in units)
+        if eta <= 0:
+            return
+        for u in units:
+            u.group_speed = max(slowest, u.path_length() / eta)
+        log.debug("%s: group of %d paced at %.0f px/s (slowest), %.1fs to arrive",
+                  self.clock(), len(units), slowest, eta)
 
     def train(self, building, kind):
         team = self.teams[building.team]
-        loadout = dict(team.designs[kind])
+        loadout = dict(building.designs[kind])
         cost = loadout_cost(kind, loadout)
         if len(building.queue) >= QUEUE_MAX:
             self.notify(building.team, "Queue is full")

@@ -70,7 +70,7 @@ class AI:
                 g.train(b, "engineer")
             elif b.kind in ARMY_MIX:
                 kind = self.rng.choices(*zip(*ARMY_MIX[b.kind]))[0]
-                self.redesign(kind)
+                self.redesign(b, kind)
                 g.train(b, kind)
 
         # Engineers: repair damaged buildings, otherwise grab nearby derricks.
@@ -143,15 +143,16 @@ class AI:
             log.debug("%s: AI sends %s #%d to capture the derrick at %s", g.clock(), u.name, u.id, p.center_tile())
             g.command_move([u], *p.center_tile(), attack=u.armed)
 
-    def redesign(self, kind):
+    def redesign(self, building, kind):
         """Occasionally try a different loadout so the enemy army isn't uniform."""
-        designs = self.game.teams[self.team].designs
+        designs = building.designs
         if self.rng.random() < 0.5:
             designs[kind] = default_loadout(kind)
             for slot in slots_for(kind):
                 if self.rng.random() < 0.5:
                     designs[kind][slot] = self.rng.randrange(len(tiers(kind, slot)))
-            log.debug("AI redesigned %s: %s", kind, loadout_summary(kind, designs[kind]))
+            log.debug("AI redesigned %s at %s %s: %s", kind, building.name, (building.tx, building.ty),
+                      loadout_summary(kind, designs[kind]))
 
     def pick_target(self, base):
         enemies = [b for b in self.game.buildings if b.team != self.team]

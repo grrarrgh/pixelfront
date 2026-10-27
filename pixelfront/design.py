@@ -66,7 +66,7 @@ class DesignScreen:
 
     @property
     def designs(self):
-        return self.game.teams[PLAYER].designs
+        return self.building.designs
 
     def rows(self):
         return [(kind, PANEL.y + HEADER_H + 2 + i * ROW_H) for i, kind in enumerate(self.kinds)]
@@ -96,7 +96,8 @@ class DesignScreen:
             for kind, slot, lv, r in self.buttons():
                 if r.collidepoint(ev.pos) and self.designs[kind][slot] != lv:
                     self.designs[kind][slot] = lv
-                    log.info("Design: %s %s -> %s (now %s, %d credits)", kind, slot_label(kind, slot),
+                    log.info("Design at %s %s: %s %s -> %s (now %s, %d credits)", self.building.name,
+                             (self.building.tx, self.building.ty), kind, slot_label(kind, slot),
                              tier(kind, slot, lv)["name"], loadout_summary(kind, self.designs[kind]),
                              loadout_cost(kind, self.designs[kind]))
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:

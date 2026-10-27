@@ -8,6 +8,7 @@ from .config import TILE, BUILDINGS, NEUTRAL, POINT_SIGHT, BURST_GAP
 GARRISON_DEFAULTS = dict(reload=1.0, damage=1.0, range=1.0, heal=0.0, sight=0)
 # Where shots leave a garrisoned structure: (reach towards the target in x, in y, height above centre).
 FIRING_PORTS = {"bunker": (9, 5, -7), "tower": (3, 2, -22)}
+PING_TIME = 0.3   # seconds a structure softly flashes when the player sends units to it
 
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class Structure(Entity):
     def __init__(self, kind, team, tx, ty, size):
         super().__init__(kind, team, (tx + size / 2) * TILE, (ty + size / 2) * TILE)
         self.tx, self.ty, self.size = tx, ty, size
+        self.ping = 0.0   # seconds left on the soft flash when the player orders units at it
 
     def rect(self):
         return (self.tx * TILE, self.ty * TILE,
@@ -56,6 +58,13 @@ class Structure(Entity):
 
     def tile_rect(self):
         return (self.tx, self.ty, self.tx + self.size - 1, self.ty + self.size - 1)
+
+    def update(self, game, dt):
+        self.ping = max(0.0, self.ping - dt)
+
+    def ping_it(self):
+        """Acknowledge an order aimed at this structure with a brief, soft flash."""
+        self.ping = PING_TIME
 
     def center_tile(self):
         return self.tx + self.size // 2, self.ty + self.size // 2
@@ -89,6 +98,9 @@ class Building(Structure):
         self.progress = 1.0 if complete else 0.0
         self.hp = self.max_hp if complete else self.max_hp * 0.1
         self.queue = []  # dicts: kind, loadout, cost, time
+        from .modules import default_loadout   # modules -> weapons -> entities: import late
+        # The loadout each unit type is trained with here; every factory keeps its own.
+        self.designs = {k: default_loadout(k) for k in st["trains"]}
         self.prod_timer = 0.0
         self.rally = None  # a tile (tx, ty) or a CapturePoint
         self.capacity = st.get("capacity", 0)   # infantry it can hold (bunkers, towers)
@@ -112,6 +124,7 @@ class Building(Structure):
 
     def update(self, game, dt):
         self.flash = max(0.0, self.flash - dt)
+        self.ping = max(0.0, self.ping - dt)
         if self.complete and self.occupants:
             self._man_the_walls(game, dt)
         if not self.complete or not self.queue:

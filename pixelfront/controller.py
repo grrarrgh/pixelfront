@@ -6,10 +6,11 @@ import pygame
 from .config import (SCREEN_W, SCREEN_H, VIEW_W, VIEW_H, TILE, MAP_W, MAP_H, PLAYER, NEUTRAL, BUILDINGS,
                      CAMERA_SPEED, EDGE_SCROLL)
 from .layer import ui_mouse
-from .modules import loadout_cost, loadout_summary, loadout_time
+from .modules import default_loadout, loadout_cost, loadout_summary, loadout_time
 from .units import UNITS
 
 TARGET_MODES = ("move", "attack", "repair")
+MARKER_TIME = 0.5   # seconds a click marker stays up (render.py animates it over this time)
 BUILDABLE = ("command", "barracks", "yard", "bunker", "tower")   # what the Command Center's menu lays down
 
 log = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ class Controller:
         self.selection = [e for e in self.selection if e.alive and not getattr(e, "inside", None)]
         for m in self.markers:
             m[2] += dt
-        self.markers = [m for m in self.markers if m[2] < 0.5]
+        self.markers = [m for m in self.markers if m[2] < MARKER_TIME]
         if self.mode in TARGET_MODES and not self.own_units():
             self.mode = None
 
@@ -103,6 +104,12 @@ class Controller:
 
     def marker(self, x, y, color):
         self.markers.append([x, y, 0.0, color])
+
+    @staticmethod
+    def ack(target):
+        """Units were sent at a building or derrick: it flashes softly to show the click landed."""
+        if target is not None and not target.is_unit:
+            target.ping_it()
 
     # ---- command card -----------------------------------------------------------
 
@@ -153,7 +160,6 @@ class Controller:
         g = self.game
         src = self.menu_source()
         speed = g.build_speed
-        designs = g.teams[PLAYER].designs
         items = []
         if src is None or src.kind == "command":
             for kind in BUILDABLE:
@@ -165,9 +171,11 @@ class Controller:
         else:
             trains = src.stats["trains"]
         for k in trains:
+            hall = self.trainer_for(k)
+            lo = hall.designs[k] if hall else default_loadout(k)
             items.append(dict(id="train:" + k, unit=k, name=UNITS[k]["name"], title="Train " + UNITS[k]["name"],
-                              cost=loadout_cost(k, designs[k]), supply=UNITS[k]["supply"], desc=UNITS[k]["desc"],
-                              loadout=loadout_summary(k, designs[k]), time=loadout_time(k, designs[k]) / speed))
+                              cost=loadout_cost(k, lo), supply=UNITS[k]["supply"], desc=UNITS[k]["desc"],
+                              design=lo, loadout=loadout_summary(k, lo), time=loadout_time(k, lo) / speed))
         items = items[:9]
         for i, it in enumerate(items):
             it["key"] = str(i + 1)
@@ -178,6 +186,12 @@ class Controller:
         own = [b for b in self.game.buildings if b.team == PLAYER and b.complete and kind in b.stats["trains"]]
         picked = [b for b in own if b in self.selection]
         return picked or own
+
+    def trainer_for(self, kind):
+        """The factory a train order for `kind` goes to (the least busy one), or None. Each factory
+        has its own unit designs, so the menu shows this one's."""
+        halls = self.factories_for(kind)
+        return min(halls, key=lambda b: len(b.queue)) if halls else None
 
     def jump_to_command_center(self):
         g = self.game
@@ -210,9 +224,9 @@ class Controller:
                 self.place_kind = kind
         elif cid.startswith("train:"):
             kind = cid[6:]
-            halls = self.factories_for(kind)
-            if halls:
-                g.train(min(halls, key=lambda b: len(b.queue)), kind)
+            hall = self.trainer_for(kind)
+            if hall:
+                g.train(hall, kind)
             else:
                 trainer = next(BUILDINGS[k]["name"] for k in BUILDINGS if kind in BUILDINGS[k]["trains"])
                 g.notify(PLAYER, f"Needs a {trainer}")
@@ -296,7 +310,9 @@ class Controller:
             j = self.hud.selection_icon_at(pos, self)
             if j is not None:
                 e = self.selection[j]
-                if shift:
+                if shift and e.is_unit:
+                    self.shift_pick(e)
+                elif shift:
                     self.selection.remove(e)
                 else:
                     self.selection = [e]
@@ -363,14 +379,22 @@ class Controller:
                                   and l <= u.x <= l + VIEW_W and t <= u.y <= t + VIEW_H]
                 return
             if shift:
-                base = self.own_units()
-                if e in base:
-                    base.remove(e)
-                else:
-                    base.append(e)
-                self.selection = base
+                self.shift_pick(e)
                 return
         self.selection = [e]
+
+    def shift_pick(self, e):
+        """Shift-click on one of your units. In a mixed selection, clicking a selected unit keeps
+        just the units of its type; otherwise it toggles that unit in or out of the selection."""
+        base = self.own_units()
+        if e in base and any(u.kind != e.kind for u in base):
+            self.selection = [u for u in base if u.kind == e.kind]
+            log.debug("Selection narrowed to %d %s (from %d units)", len(self.selection), e.kind, len(base))
+        elif e in base:
+            base.remove(e)
+            self.selection = base
+        else:
+            self.selection = base + [e]
 
     def key_down(self, ev):
         g = self.game
@@ -439,15 +463,16 @@ class Controller:
             return
         if target is not None and target.is_point:
             g.command_move(units, *target.center_tile())
+            self.ack(target)
             self.marker(target.x, target.y, (240, 220, 90))
             return
         if target is not None and target.team not in (PLAYER, NEUTRAL):
             log.debug("%s: %d units ordered to attack %s #%d", g.clock(), len(units), target.name, target.id)
-            movers = [u for u in units if not u.armed]
             for u in units:
                 u.order_attack(g, target)
-            if movers:
-                g.command_move(movers, tx, ty)
+            if not g.send_escorts(units):
+                g.command_move([u for u in units if not u.armed], tx, ty)
+            self.ack(target)
             self.marker(target.x, target.y, (235, 70, 60))
             return
         movers = []
@@ -467,6 +492,7 @@ class Controller:
         if movers:
             g.command_move(movers, tx, ty)
         others = len(units) - len(movers)
+        self.ack(target)
         log.debug("%s: right-click at %s: %d moving, %d given a task", g.clock(), (tx, ty), len(movers), others)
         self.marker(wx, wy, (90, 230, 90))
 
@@ -481,6 +507,8 @@ class Controller:
             if target is not None and target.team not in (PLAYER, NEUTRAL):
                 for u in units:
                     u.order_attack(g, target)
+                g.send_escorts(units)
+                self.ack(target)
             else:
                 g.command_move(units, tx, ty, attack=True)
             self.marker(wx, wy, (235, 70, 60))
@@ -495,6 +523,7 @@ class Controller:
                         u.order_construct(g, target)
                     else:
                         u.order_repair(g, target)
+            self.ack(target)
             self.marker(wx, wy, (240, 220, 90))
         if not shift:
             self.mode = None

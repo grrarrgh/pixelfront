@@ -165,7 +165,7 @@ class HUD:
             bevel(surf, rr, raised=not active, fill=(84, 78, 96) if hover else (66, 62, 76))
             if it.get("unit"):
                 kind = it["unit"]
-                icon = self.sp.icon_hi("unit:" + kind, 20, PLAYER, g.teams[PLAYER].designs[kind])
+                icon = self.sp.icon_hi("unit:" + kind, 20, PLAYER, it["design"])
             else:
                 icon = self.sp.icon_hi(it["icon"], 20)
             self.picture(icon, rr.x + 12, rr.centery)
@@ -350,7 +350,7 @@ class HUD:
             bevel(surf, r, raised=not active, fill=(84, 78, 96) if hover else (66, 62, 76))
             if cmd.get("unit"):
                 kind = cmd["unit"]
-                self.picture(self.sp.icon_hi("unit:" + kind, 26, PLAYER, self.game.teams[PLAYER].designs[kind]),
+                self.picture(self.sp.icon_hi("unit:" + kind, 26, PLAYER, cmd.get("design")),
                              *r.center)
             else:
                 icon = self.sp.icons[cmd["icon"]]

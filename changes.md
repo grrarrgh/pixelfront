@@ -2,6 +2,40 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.13.0 "Close Order" (2026-10-27)
+
+Groups that move as one, with vehicles in front, plus clearer click feedback and per-factory designs.
+
+### Changed
+
+- **Each factory has its own unit designs.** Changing a unit's loadout in one Barracks or Vehicle
+  Yard no longer changes it in the others; new factories start on the defaults.
+  - The build menu shows the design of the factory the order will go to. That's the selected
+    one, or the least busy one if none is selected.
+  - The computer opponent varies its designs per factory too.
+- **Groups move at the pace of the slowest unit**, so they stay together. Units with further to
+  go speed up just enough to arrive with the rest.
+- **Vehicles lead the group.** Soldiers wait for any vehicle behind them to roll past (for up to
+  6 seconds), and vehicles take the front spots where the group stops.
+- **Medics and engineers hang back.** They take the back of the formation. On an attack or
+  attack-move they follow the nearest fighter instead of running ahead to the target. Medics
+  stop to heal the wounded along the way.
+- **Shift-click in a mixed selection** on one of the selected units keeps only units of that
+  type. This works on the map and on the selection icons. In a selection of one type,
+  shift-click still removes the unit.
+
+### Added
+
+- **Click ring:** move and attack clicks show a ring that snaps in on the spot while a fainter
+  ripple spreads out and fades, instead of the old shrinking box.
+- **Building acknowledgement:** right-clicking a building or derrick with units selected (to
+  attack, repair, build, man or capture it) makes it flash once, softly.
+
+### Fixed
+
+- Units in a tight crowd could stall on their path, each blocking the others from reaching
+  the same tile. A unit already on a waypoint's tile now heads straight for the next one.
+
 ## 0.12.0 "Fine Grain" (2026-10-27)
 
 Twice the pixel detail, and redesigned units and buildings to make use of it.
