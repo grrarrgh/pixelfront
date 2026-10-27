@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 from .sprites import K
 
 # A compact popup centred over the map view (about half the old full-screen panel).
-PANEL = pygame.Rect(0, 0, 376, 220)
+PANEL = pygame.Rect(0, 0, 386, 220)
 PANEL.center = (VIEW_W // 2, (TOPBAR_H + VIEW_H) // 2)
 HEADER_H = 16
 ROW_H = 58
@@ -27,6 +27,10 @@ PREVIEW_W, PREVIEW_H = 46, 52   # unit preview frame, drawn over a patch of the 
 COLS_X = PANEL.x + 6 + PREVIEW_W + 6   # module columns start here
 COL_W, COL_GAP = 54, 3
 STAT_COL = 68                          # width of each of the two stat columns
+# The unit rows scroll inside this area when there are more than fit (the Barracks has four).
+LIST = pygame.Rect(PANEL.x, PANEL.y + HEADER_H, PANEL.w, PANEL.h - HEADER_H - FOOTER_H - 4)
+TRACK = pygame.Rect(PANEL.right - 7, LIST.y + 2, 4, LIST.h - 4)   # the scroll bar's track
+WHEEL_STEP = ROW_H // 2
 
 
 class DesignScreen:
@@ -36,6 +40,8 @@ class DesignScreen:
         self.building = building
         self.kinds = list(building.stats["trains"])
         self.hover = None  # (kind, slot, level)
+        self.scroll = 0    # px the unit rows are scrolled up by
+        self.drag = None   # (mouse y, scroll) when the scroll bar's thumb was grabbed
         self.backdrops = {}
         pw, ph = PREVIEW_W * RES, PREVIEW_H * RES       # the preview, in screen pixels
         for scale in (1, 2):
@@ -52,6 +58,8 @@ class DesignScreen:
         infantry = UNITS[kind]["cls"] == "infantry"
         scale = 2 if infantry else 1
         box = pygame.Rect(PANEL.x + 6, y, PREVIEW_W, PREVIEW_H)
+        if not box.colliderect(LIST):
+            return
         pv = self.backdrops[scale].copy()
         img, (ox, oy) = self.sp.unit(kind, PLAYER, lo).frame("idle", 0, 30)
         img = pygame.transform.scale(img, (img.get_width() * scale, img.get_height() * scale))
@@ -61,7 +69,7 @@ class DesignScreen:
         pygame.draw.ellipse(shadow, (60, 30, 10, 80), shadow.get_rect())
         pv.blit(shadow, shadow.get_rect(center=(gx, gy + k)))
         pv.blit(img, (gx - ox * scale, gy - oy * scale))
-        self.layer.image(pv, box.x, box.y)
+        self.layer.image_center(pv, box.centerx, box.centery, clip=box.clip(LIST))
         pygame.draw.rect(surf, (110, 100, 122), box, 1)
 
     @property
@@ -69,7 +77,22 @@ class DesignScreen:
         return self.building.designs
 
     def rows(self):
-        return [(kind, PANEL.y + HEADER_H + 2 + i * ROW_H) for i, kind in enumerate(self.kinds)]
+        return [(kind, LIST.y + 2 + i * ROW_H - self.scroll) for i, kind in enumerate(self.kinds)]
+
+    @property
+    def max_scroll(self):
+        return max(0, len(self.kinds) * ROW_H - LIST.h)
+
+    def scroll_to(self, px):
+        self.scroll = int(min(self.max_scroll, max(0, px)))
+
+    def thumb(self):
+        """The scroll bar's thumb, or None when everything fits."""
+        if not self.max_scroll:
+            return None
+        h = max(12, TRACK.h * LIST.h // (LIST.h + self.max_scroll))
+        y = TRACK.y + (TRACK.h - h) * self.scroll // self.max_scroll
+        return pygame.Rect(TRACK.x, y, TRACK.w, h)
 
     def buttons(self):
         """(kind, slot, level, rect) for every tier button."""
@@ -88,11 +111,31 @@ class DesignScreen:
         """Returns "close" when the screen should be dismissed."""
         if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_ESCAPE, pygame.K_e, pygame.K_RETURN):
             return "close"
+        if ev.type == pygame.MOUSEWHEEL and self.max_scroll:
+            self.scroll_to(self.scroll - ev.y * WHEEL_STEP)
+            self.hover = None
+        if ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+            self.drag = None
         if ev.type == pygame.MOUSEMOTION:
-            self.hover = next(((k, s, lv) for k, s, lv, r in self.buttons() if r.collidepoint(ev.pos)), None)
+            if self.drag:
+                y0, s0 = self.drag
+                th = self.thumb()
+                room = TRACK.h - th.h
+                self.scroll_to(s0 + (ev.pos[1] - y0) * self.max_scroll / max(1, room))
+            inside = LIST.collidepoint(ev.pos)
+            self.hover = next(((k, s, lv) for k, s, lv, r in self.buttons()
+                               if inside and r.collidepoint(ev.pos)), None)
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             if self.close_rect().collidepoint(ev.pos):
                 return "close"
+            th = self.thumb()
+            if th and TRACK.inflate(4, 0).collidepoint(ev.pos):
+                if not th.collidepoint(ev.pos):   # click the track: jump a page that way
+                    self.scroll_to(self.scroll + (LIST.h if ev.pos[1] > th.centery else -LIST.h))
+                self.drag = (ev.pos[1], self.scroll)
+                return None
+            if not LIST.collidepoint(ev.pos):
+                return None
             for kind, slot, lv, r in self.buttons():
                 if r.collidepoint(ev.pos) and self.designs[kind][slot] != lv:
                     self.designs[kind][slot] = lv
@@ -116,8 +159,11 @@ class DesignScreen:
         pygame.draw.rect(surf, (110, 100, 122), PANEL, 1)
         draw_text(surf, f"Unit design - {self.building.name}", PANEL.x + 6, PANEL.y + 5, YELLOW)
 
+        surf.set_clip(LIST)
         for kind, y in self.rows():
-            if y > PANEL.y + HEADER_H + 2:
+            if y + ROW_H < LIST.y or y > LIST.bottom:
+                continue
+            if y > LIST.y + 2:
                 pygame.draw.line(surf, (60, 56, 70), (PANEL.x + 6, y - 4), (PANEL.right - 6, y - 4))
             lo = self.designs[kind]
             self.draw_preview(surf, kind, lo, y)
@@ -134,6 +180,12 @@ class DesignScreen:
                           (255, 255, 255) if chosen else (210, 210, 220), shadow=dark if chosen else None,
                           align="center")
             self.draw_stats(surf, kind, lo, COLS_X + len(slots) * (COL_W + COL_GAP) + 4, y)
+        surf.set_clip(None)
+        th = self.thumb()
+        if th:
+            pygame.draw.rect(surf, (36, 33, 44), TRACK)
+            grabbed = self.drag is not None
+            pygame.draw.rect(surf, (150, 140, 166) if grabbed else (110, 100, 122), th)
 
         fy = PANEL.bottom - FOOTER_H
         pygame.draw.line(surf, (60, 56, 70), (PANEL.x + 6, fy - 2), (PANEL.right - 6, fy - 2))

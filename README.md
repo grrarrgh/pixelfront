@@ -77,10 +77,10 @@ Some units' weapon tiers are real, distinct weapons:
 
 | Unit | Light | Medium (default) | Heavy |
 | --- | --- | --- | --- |
-| Rifleman | Pistol | Rifle | Machine gun |
+| Rifleman | Sniper rifle: long range, extra damage to soldiers, almost none to vehicles and buildings | Rifle, fired in 5-round bursts | Machine gun |
 | Heavy Infantry | M60 | Grenade launcher | Shoulder rocket launcher |
-| Anti-Armor | Rifle with underbarrel grenade launcher (a grenade every 9s) | 6-round automatic grenade launcher | Javelin missile: arcs onto its target, wrecks vehicles |
-| Jeep | M2 Browning | UAG-40 automatic grenade launcher | Twin wire-guided missiles |
+| Anti-Armor | Rifle with underbarrel grenade launcher (a grenade every 9s) | 6-round automatic grenade launcher | Javelin missile: arcs onto its target and tracks it, never misses, wrecks vehicles |
+| Jeep | M2 Browning | UAG-40 automatic grenade launcher: 3-round bursts, reloads after 5 | Twin wire-guided missiles |
 | Tank | Bushmaster II 30mm autocannon | 120mm cannon | 155mm self-propelled gun (must deploy to fire) |
 
 For medics and engineers the weapon slot is the bag they carry: satchel, kit case or backpack.
@@ -91,8 +91,10 @@ before they fire. Anti-armour soldiers with a Javelin go for vehicles first.
 **155mm self-propelled gun:** the tank's Heavy weapon swaps the turret for an open-topped gun
 house with a long howitzer. It turns to face its target, then takes 2 seconds to deploy: spades
 drop at the rear, jacks push down at the sides, the travel lock folds away and the barrel rises.
-Once dug in it can only fire within a narrow arc. To turn further, or to move, it packs up
-again first (another 2 seconds, done automatically).
+Once dug in, the gun house turns on the hull to follow targets. To move it packs up again first
+(the gun house swings back to the front, then another 2 seconds; done automatically). Select it
+and press **Q** (Deploy) to dig in where it stands and hold that ground, firing on anything in
+range without chasing; **E** (Pack up) gets it ready to drive.
 
 Units are trained with the design that was current when you queued them, and look the part:
 
@@ -116,7 +118,7 @@ Every weapon is one of three types:
 
 | Type | Weapons | Behaviour |
 | --- | --- | --- |
-| Bullets | Pistol, rifle, M60, M2 | Instant hits. Every round pins down the soldier it's aimed at. Moderate damage to jeeps, weak against tanks and buildings. Bursts spray out in a cone, and misses fly on past the target. |
+| Bullets | Pistol, sniper rifle, rifle, M60, M2 | Instant hits. Every round pins down the soldier it's aimed at. Moderate damage to jeeps, weak against tanks and buildings. Bursts spray out in a cone, and misses fly on past the target. |
 | Explosives | Grenade launchers (incl. underbarrel and 6-round automatic), UAG-40, Bushmaster, 155mm | Splash damage. Pins down all infantry near the blast. Heavy damage to tanks and buildings. |
 | Anti-armour | Rocket launcher, Javelin, TOW, 120mm | Big hits with a bonus against vehicles, and a small blast. |
 
@@ -178,16 +180,17 @@ Medics and engineers have to be touching whoever or whatever they heal, repair o
 | Double click, Ctrl + click | Select all units of that type on screen |
 | Right click | Smart command: move, attack, capture a derrick, heal (medic), build/repair (engineer). With a building selected: set rally point |
 | `1`-`9` | Build menu: place a building or train a unit (Shift+click places several) |
-| `Q` then click | Attack (click an enemy) or attack-move (click ground) |
+| `T` then click | Attack (click an enemy) or attack-move (click ground) |
+| 155mm tank: `Q` / `E` | Deploy (dig in and hold) / Pack up |
 | `M` / `X` | Move / Stop |
-| Engineer: `R` | Repair |
+| Engineer: `F` | Repair |
 | Bunker / Tower: `U` | Unload the garrison (right-click one with infantry to man it) |
 | Factory: `E` | Unit design popup |
 | Building under construction: `X` | Cancel (refunds) |
 | Click a queue slot | Cancel training (refunds). Factories queue up to 15. |
 | Ctrl + 1-9, Shift + 1-9 | Assign / recall control group (recall twice to jump the camera) |
 | `W` `A` `S` `D`, arrow keys, screen edges, middle-drag, minimap | Move camera |
-| Command Center picture (top of the build menu) | Jump to your Command Center |
+| Picture at the top of the build menu | The selected building in detail (click to jump to it), or your Command Center |
 | Space | Jump to your base |
 | F1 | Controls overlay |
 | F11 | Toggle fullscreen |

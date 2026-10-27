@@ -8,7 +8,7 @@ import math
 
 from ..config import (TILE, BUILDINGS, INTERACT, REPAIR_RATE, PRONE_SPEED, SUPPRESS_ON, SUPPRESS_OFF,
                       SUPPRESS_DECAY, SUPPRESS_CALM, PRONE_RANGE, TURRET_SPEED, KNEEL_TIME, STEER_MAX,
-                      BURST_GAP, RETREAT_DISTANCE, RETREAT_COOLDOWN, RETREAT_TIMEOUT)
+                      RETREAT_DISTANCE, RETREAT_COOLDOWN, RETREAT_TIMEOUT)
 from ..entities import Entity, dist_point_rect
 from ..modules import compute_stats, default_loadout
 from ..pathfinding import find_path
@@ -53,6 +53,12 @@ class Unit(Entity):
         self.burst = max(1, int(st["burst"]))   # rounds per trigger pull (machine guns)
         self.burst_left = 0
         self.burst_timer = 0.0
+        wd = weapon_def(self.weapon) if self.weapon else dict(burst_gap=0.0, volley=False, mag=0, reload=0.0)
+        self.burst_gap = wd["burst_gap"]   # seconds between a burst's rounds
+        self.volley = wd["volley"]         # the burst is one shot: later rounds just show
+        self.volley_hit = False            # whether this burst's first round hit
+        self.mag = self.mag_left = wd["mag"]   # bursts before a long reload (0 = no magazine)
+        self.reload_time = wd["reload"]
         self.passive = False  # test-range targets never acquire or return fire
         self.inside = None    # the bunker this soldier is manning, if any
         self.assist = None    # (kind, tx, ty) of a building site this engineer is helping on
@@ -107,6 +113,7 @@ class Unit(Entity):
         self.deploy_time = weapon_def(self.weapon)["deploy"] if self.weapon else 0.0
         self.deploy = 0.0
         self.packing = False
+        self.dug_in = False   # deployed on the player's order: holds its ground until told to pack up
 
     def rect(self):
         r = self.radius
@@ -116,11 +123,21 @@ class Unit(Entity):
         tx, ty = self.tile()
         return (tx, ty, tx, ty)
 
+    @property
+    def turret_free(self):
+        """Whether the turret aims on its own: always for turrets, and for artillery once dug in
+        (its gun house traverses on the hull)."""
+        return self.has_turret or (self.deploy_time > 0 and self.deploy >= 1)
+
+    @property
+    def turret_rel(self):
+        """The turret's angle relative to the hull, as drawn."""
+        return self.turret - self.facing if self.turret_free else 0.0
+
     def muzzle_pos(self):
         from ..sprites import muzzle_offset  # geometry lives with the 3D models
-        dx, dy = muzzle_offset(self.kind, self.loadout, self.facing, self.suppressed,
-                               self.turret - self.facing if self.has_turret else 0.0, self.kneeling,
-                               self.deploy >= 1)
+        dx, dy = muzzle_offset(self.kind, self.loadout, self.facing, self.suppressed, self.turret_rel,
+                               self.kneeling, self.deploy >= 1)
         return self.x + dx, self.y + dy
 
     @property
@@ -163,35 +180,46 @@ class Unit(Entity):
     def attack_range(self):
         return self.range * (PRONE_RANGE if self.suppressed else 1.0)
 
-    DEPLOYED_ARC = 10   # degrees either side a dug-in gun can still lay onto without moving
+    GUN_HOUSE_SPEED = 0.45   # fraction of TURRET_SPEED a dug-in gun house traverses at
+
+    def _swing_turret(self, want, speed, dt):
+        """Turn the turret towards absolute bearing `want`. Returns how far off it still is."""
+        diff = (want - self.turret + 180) % 360 - 180
+        step = speed * dt
+        self.turret = want if abs(diff) <= step else (self.turret + math.copysign(step, diff)) % 360
+        return abs((want - self.turret + 180) % 360 - 180)
 
     def aim_at(self, x, y, dt):
         """Turn the turret (or hull, for fixed guns) towards a point. Returns True once on target."""
         want = math.degrees(math.atan2(y - self.y, x - self.x)) % 360
         if not self.has_turret:
-            if self.is_vehicle:   # fixed gun: swing the whole hull round at its turn rate
-                diff = (want - self.facing + 180) % 360 - 180
-                if self.deploy > 0:   # dug in: fire within the arc, or pack up to turn
-                    if abs(diff) <= self.DEPLOYED_ARC:
-                        return True
-                    self._pack(dt)
-                    return False
+            if self.is_vehicle:   # fixed gun
+                if self.deploy >= 1:   # dug in: the gun house traverses
+                    self.packing = False
+                    return self._swing_turret(want, TURRET_SPEED * self.GUN_HOUSE_SPEED, dt) <= 6
+                if self.deploy > 0:    # part dug in: finish digging in, then traverse
+                    return True
+                diff = (want - self.facing + 180) % 360 - 180   # travelling: swing the whole hull
                 step = self.hull_turn * dt
                 self.facing = (self.facing + max(-step, min(step, diff))) % 360
                 return abs(diff) <= 6
             self.face(x, y)
             return True
-        diff = (want - self.turret + 180) % 360 - 180
-        step = TURRET_SPEED * dt
-        self.turret = want if abs(diff) <= step else (self.turret + math.copysign(step, diff)) % 360
-        return abs(diff) <= 8
+        return self._swing_turret(want, TURRET_SPEED, dt) <= 8
 
     def _pack(self, dt):
-        """Artillery packing up: spades up, barrel down, before it can turn or drive."""
-        if self.deploy >= 1:
+        """Artillery packing up: the gun house swings back to the front, then spades up and
+        barrel down, before it can turn or drive."""
+        if not self.packing:
             log.debug("%s #%d packing up", self.name, self.id)
         self.packing = True
+        self.dug_in = False
+        if self.deploy >= 1 and self._swing_turret(self.facing, TURRET_SPEED * self.GUN_HOUSE_SPEED, dt) > 0:
+            return
         self.deploy = max(0.0, self.deploy - dt / self.deploy_time)
+        if self.deploy <= 0:
+            self.packing = False
+            log.debug("%s #%d packed up", self.name, self.id)
 
     def _dig_in(self, dt):
         self.packing = False
@@ -200,7 +228,9 @@ class Unit(Entity):
             log.debug("%s #%d deployed", self.name, self.id)
 
     def _relax_turret(self, dt):
-        if self.has_turret:
+        if self.deploy_time and not self.turret_free:
+            self.turret = self.facing   # travelling artillery: the gun house is locked forward
+        elif self.has_turret:
             diff = (self.facing - self.turret + 180) % 360 - 180
             step = TURRET_SPEED * 0.5 * dt
             self.turret = self.facing if abs(diff) <= step else (self.turret + math.copysign(step, diff)) % 360
@@ -286,13 +316,17 @@ class Unit(Entity):
     def status(self):
         if self.suppressed:
             return "Pinned down!"
-        if 0 < self.deploy < 1:
-            return "Packing up" if self.packing else "Deploying"
+        if self.deploy > 0 and self.packing:
+            return "Packing up"
+        if 0 < self.deploy < 1 or self.order == "deploy":
+            return "Deploying"
         if self.order == "build":
             return "Going to build " + BUILDINGS[self.build_plan[0]]["name"]
         if self.deploy >= 1 and self.order in ("idle", "attack"):
-            return "Deployed" if self.order == "idle" else "Firing (deployed)"
-        return {"idle": "Idle", "move": "Moving", "amove": "Attack-moving", "attack": "Attacking",
+            if self.order == "attack":
+                return "Firing (deployed)"
+            return "Dug in" if self.dug_in else "Deployed"
+        return {"idle": "Idle", "pack": "Packing up", "move": "Moving", "amove": "Attack-moving", "attack": "Attacking",
                 "heal": "Healing", "repair": "Repairing", "construct": "Building",
                 "assist": "Helping to build", "garrison": "Heading for the bunker",
                 "escort": "Following"}[self.order]
@@ -314,6 +348,7 @@ class Unit(Entity):
         self.hold_t = 0.0
         self.burst_left = 0
         self.repath = 0.0
+        self.dug_in = False
 
     def plan_to(self, game, rect, adjacent):
         self.goal = (rect, adjacent)
@@ -357,6 +392,23 @@ class Unit(Entity):
 
     def order_construct(self, game, building):
         self._order_target(game, "construct", building)
+
+    def order_deploy(self, game):
+        """Artillery digs in where it stands and holds its ground, firing on anything in range."""
+        if not self.deploy_time:
+            return
+        self._reset(game)
+        self.order = "deploy"
+        self.dug_in = True
+        log.info("%s: %s #%d (team %d) ordered to deploy", game.clock(), self.name, self.id, self.team)
+
+    def order_pack(self, game):
+        """Artillery packs up, ready to drive."""
+        if not self.deploy_time:
+            return
+        self._reset(game)
+        self.order = "pack"
+        log.info("%s: %s #%d (team %d) ordered to pack up", game.clock(), self.name, self.id, self.team)
 
     def order_garrison(self, game, bunker):
         self._order_target(game, "garrison", bunker)
@@ -521,7 +573,7 @@ class Unit(Entity):
             self._look_around(game, dt)
         else:
             self.look, self.check_t = None, 0.0
-        if not self.aiming and not (on_watch and self.has_turret):
+        if not self.aiming and not (on_watch and self.turret_free) and not self.packing:
             self._relax_turret(dt)
 
     IDLE_TURRET_SPEED = 0.35   # fraction of TURRET_SPEED a turret sweeps at while scanning
@@ -545,16 +597,28 @@ class Unit(Entity):
         if self.look is None:
             return
         if self.is_vehicle:
-            if not self.has_turret:
+            if not self.turret_free:
                 return
-            want = (self.facing + self.look) % 360
-            diff = (want - self.turret + 180) % 360 - 180
-            step = TURRET_SPEED * self.IDLE_TURRET_SPEED * dt
-            self.turret = want if abs(diff) <= step else (self.turret + math.copysign(step, diff)) % 360
+            speed = TURRET_SPEED * self.IDLE_TURRET_SPEED * (self.GUN_HOUSE_SPEED if not self.has_turret else 1)
+            self._swing_turret((self.facing + self.look) % 360, speed, dt)
         else:
             diff = (self.look - self.facing + 180) % 360 - 180
             step = self.IDLE_TURN_SPEED * dt
             self.facing = self.look if abs(diff) <= step else (self.facing + math.copysign(step, diff)) % 360
+
+    def do_deploy(self, game, dt):
+        if self.deploy < 1:
+            self._dig_in(dt)
+        else:
+            self.order = "idle"
+            self.scan = 0.0
+
+    def do_pack(self, game, dt):
+        if self.deploy > 0:
+            self._pack(dt)
+        else:
+            self.order = "idle"
+            self.scan = 0.0
 
     def do_idle(self, game, dt):
         if self.kind == "engineer" or self.passive:
@@ -570,7 +634,8 @@ class Unit(Entity):
                 self.target = patient
                 self.repath = 0.0
         elif self.armed:
-            enemy = game.find_enemy_near(self, self.sight * TILE)
+            # Dug in on orders, it only takes on what it can reach from where it stands.
+            enemy = game.find_enemy_near(self, self.attack_range if self.dug_in else self.sight * TILE)
             if enemy:
                 self.order = "attack"
                 self.target = enemy
@@ -611,14 +676,14 @@ class Unit(Entity):
             # gone, inside a structure, or out of sight up on a cliff
             self._target_gone(game)
             return
+        if self.dug_in and self.edge_dist(t) > self.attack_range:
+            self._target_gone(game)   # holding its ground: don't pack up to chase
+            return
         if self.burst_left > 0:   # finish the burst before anything else
             self.aiming = True
-            self.burst_timer -= dt
-            if self.burst_timer <= 0:
-                self.burst_left -= 1
-                self.burst_timer = BURST_GAP
-                self.lunge = 0.08
-                game.attack(self, t)
+            if not self.is_vehicle:
+                self.face(t.x, t.y)
+            self.burst_step(game, t, dt)
             return
         if self.suppressed and self.edge_dist(t) > self.attack_range:
             # Pinned soldiers don't crawl towards the enemy: shoot at whoever is in reach, or
@@ -639,15 +704,37 @@ class Unit(Entity):
                 self._dig_in(dt)   # artillery: spades down and barrel up before the first shot
             return
         if on_target and self.cooldown <= 0:
-            self.cooldown = self.attack_time
-            self.lunge = 0.12
             sec = self.secondary and weapon_def(self.secondary)
             if sec and self.sec_cooldown <= 0 and self.edge_dist(t) <= sec["range"]:
+                self.cooldown = self.attack_time
+                self.lunge = 0.12
                 self.sec_cooldown = sec["cooldown"]   # this pull fires the grenade instead
                 game.attack(self, t, wid=self.secondary)
                 return
-            self.burst_left, self.burst_timer = self.burst - 1, BURST_GAP
-            game.attack(self, t)
+            self.pull_trigger(game, t)
+
+    def pull_trigger(self, game, t, mult=1.0, origin=None, reload=1.0):
+        """Fire the first round of a burst at t; burst_step() fires the rest. A weapon with a
+        magazine reloads after its last burst. reload scales the wait (a bunker's bonus)."""
+        self.cooldown = self.attack_time * reload
+        if self.mag:
+            self.mag_left -= 1
+            if self.mag_left <= 0:
+                self.mag_left = self.mag
+                self.cooldown = max(self.cooldown, self.reload_time * reload)
+                log.debug("%s #%d (team %d) reloading (%.1fs)", self.name, self.id, self.team, self.cooldown)
+        self.lunge = 0.12
+        self.burst_left, self.burst_timer = self.burst - 1, self.burst_gap
+        self.volley_hit = game.attack(self, t, mult, origin)
+
+    def burst_step(self, game, t, dt, mult=1.0, origin=None):
+        """The rest of a burst, one round every burst_gap seconds."""
+        self.burst_timer -= dt
+        if self.burst_timer <= 0:
+            self.burst_left -= 1
+            self.burst_timer = self.burst_gap
+            self.lunge = 0.08
+            game.attack(self, t, mult, origin, follow=self.volley_hit if self.volley else None)
 
     def do_garrison(self, game, dt):
         b = self.target

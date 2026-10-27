@@ -16,7 +16,7 @@ give it a look in model3d (models pick their weapon visuals by weapon id).
 """
 import math
 
-from .config import (SUPPRESS_PER_SHOT, SUPPRESS_EXPLOSIVE, SUPPRESS_RADIUS, PRONE_ACCURACY,
+from .config import (BURST_GAP, SUPPRESS_PER_SHOT, SUPPRESS_EXPLOSIVE, SUPPRESS_RADIUS, PRONE_ACCURACY,
                      PRONE_TARGET_HIT)
 from .entities import dist_point_rect
 
@@ -69,12 +69,12 @@ def target_class(target):
     return target.target_class
 
 
-def effectiveness(target, wtype):
-    """Fraction of a `wtype` hit that gets through: the type against this class of target,
-    then the target's armour rank (units only)."""
+def effectiveness(target, wtype, vs=None):
+    """Fraction of a `wtype` hit that gets through: the type (or the weapon's own `vs`) against
+    this class of target, then the target's armour rank (units only)."""
     if wtype is None:
         return 1.0
-    f = WEAPON_TYPES[wtype]["vs"][target_class(target)]
+    f = (vs or WEAPON_TYPES[wtype]["vs"])[target_class(target)]
     if target.is_unit:
         f *= armor_rank("vehicle" if target.is_vehicle else "infantry", target.armor_rank)[wtype]
         if (wtype == "explosive" and target.is_infantry and target.suppressed
@@ -83,8 +83,8 @@ def effectiveness(target, wtype):
     return f
 
 
-def _hit(game, target, amount, source, wtype):
-    game.damage(target, amount * effectiveness(target, wtype), source)
+def _hit(game, target, amount, source, wtype, vs=None):
+    game.damage(target, amount * effectiveness(target, wtype, vs), source)
 
 
 # Armoured infantry lying prone take only this much from explosives: flat on the ground, the
@@ -109,13 +109,21 @@ PROJECTILE_STYLES = {
 # damage per round, cooldown = seconds between trigger pulls, range in px, accuracy 0..1,
 # burst = rounds per trigger pull, projectile = a PROJECTILE_STYLES key (None = instant hit),
 # splash = blast radius in px, fixed = can't traverse (the vehicle turns to aim), deploy = seconds
-# to dig in before it can fire (and to pack up again before moving).
+# to dig in before it can fire (and to pack up again before moving), burst_gap = seconds between
+# rounds of a burst, volley = the burst counts as one shot (one hit roll, one hit of `damage`; the
+# other rounds are for show), spread = px lobbed rounds scatter round the target even when on
+# target, mag = bursts before a reload of `reload` seconds, vs = the weapon's own damage
+# multipliers per target class (instead of its type's), sure = never misses.
 WEAPONS = {
     # Bullets
+    "sniper": dict(name="Sniper rifle", type="bullet", damage=16, cooldown=2.4, range=100, accuracy=0.95,
+                   vs=dict(infantry=1.5, light_vehicle=0.25, heavy_vehicle=0.05, building=0.05),
+                   desc="Long reach, slow and deadly against soldiers; next to useless against "
+                        "vehicles and buildings."),
     "pistol": dict(name="Pistol", type="bullet", damage=3.6, cooldown=0.72, range=38, accuracy=0.97,
                    desc="Light sidearm: accurate, short range."),
-    "rifle": dict(name="Rifle", type="bullet", damage=6, cooldown=0.9, range=64, accuracy=0.85,
-                  desc="All-purpose rifle."),
+    "rifle": dict(name="Rifle", type="bullet", damage=8, cooldown=1.2, burst=5, volley=True, range=64,
+                  accuracy=0.85, desc="All-purpose rifle, fired in 5-round bursts."),
     # secondary = a second weapon fired whenever its own (much longer) reload allows.
     "rifle_ugl": dict(name="Rifle + grenade launcher", type="bullet", damage=6, cooldown=0.9, range=64,
                       accuracy=0.85, secondary="ugl",
@@ -131,12 +139,14 @@ WEAPONS = {
     "ugl": dict(name="40mm underbarrel grenade", type="explosive", damage=22, cooldown=9.0, range=80,
                 accuracy=0.8, vs_vehicle=1.6, projectile="grenade", splash=12,
                 desc="Dual-purpose grenade: splash, and good against light armour."),
-    "agl6": dict(name="Auto grenade launcher", type="explosive", damage=9, cooldown=4.5, burst=6, range=84,
+    "agl6": dict(name="Auto grenade launcher", type="explosive", damage=9, cooldown=5.5, burst=6,
+                 burst_gap=0.3, range=84,
                  accuracy=0.7, vs_vehicle=1.3, projectile="grenade", splash=10,
                  desc="6-round automatic grenade launcher: bursts of splashing grenades, then a long reload."),
-    "uag40": dict(name="UAG-40", type="explosive", damage=10, cooldown=0.6, range=84, accuracy=0.75,
-                  projectile="grenade", splash=12,
-                  desc="Automatic grenade launcher: bursts of splashing grenades."),
+    "uag40": dict(name="UAG-40", type="explosive", damage=8, cooldown=0.9, burst=3, spread=7, mag=5,
+                  reload=6.0, range=84, accuracy=0.75, projectile="grenade", splash=12,
+                  desc="Automatic grenade launcher: 3-round bursts that spread over the target, "
+                       "then a 6s reload after every 5 bursts."),
     # Low damage per round, so armour soaks a lot of each hit: one wears a tank down slowly,
     # several together take it apart. (Tank guns reload slowest of all: see tests.)
     "bushmaster": dict(name="Bushmaster II 30mm", type="explosive", damage=7, cooldown=3.0, burst=10,
@@ -152,10 +162,11 @@ WEAPONS = {
                             accuracy=0.9, projectile="rocket",
                             desc="Shoulder-fired rockets: slow to reload, devastating vs vehicles."),
     # Low base damage with a big multiplier against vehicles: poor at killing soldiers.
-    "javelin": dict(name="Javelin", type="anti_armor", damage=18, cooldown=4.0, range=124, accuracy=0.97,
-                    vs_vehicle=3.4, projectile="javelin",
-                    desc="Missile that arcs up and dives onto its target: longest reach, wrecks "
-                         "vehicles, weak against soldiers, slow to reload."),
+    "javelin": dict(name="Javelin", type="anti_armor", damage=18, cooldown=4.0, range=124, accuracy=1.0,
+                    sure=True, vs_vehicle=3.4, projectile="javelin",
+                    desc="Missile that arcs up and dives onto its target, tracking it as it moves: "
+                         "never misses, longest reach, wrecks vehicles, weak against soldiers, "
+                         "slow to reload."),
     "tow": dict(name="Twin TOW", type="anti_armor", damage=32, cooldown=2.8, range=110, accuracy=0.95,
                 vs_vehicle=1.8, projectile="atgm",
                 desc="Wire-guided missiles: long range, deadly vs vehicles, slow to reload."),
@@ -178,7 +189,8 @@ WEAPON_STATS = ("damage", "cooldown", "range", "accuracy", "burst", "vs_vehicle"
 def weapon(wid):
     """A weapon's full definition: its type's defaults overlaid with its own entries."""
     w = WEAPONS[wid]
-    out = dict(burst=1, splash=0, projectile=None, fixed=False, secondary=None, deploy=0.0)
+    out = dict(burst=1, splash=0, projectile=None, fixed=False, secondary=None, deploy=0.0,
+               burst_gap=BURST_GAP, volley=False, spread=0, mag=0, reload=0.0, sure=False)
     out.update(WEAPON_TYPES[w["type"]])
     out.update(w)
     return out
@@ -194,40 +206,59 @@ def stats(wid):
 
 # ---- firing -----------------------------------------------------------------------
 
-def fire(game, shooter, target, mult=1.0, origin=None, wid=None):
+def fire(game, shooter, target, mult=1.0, origin=None, wid=None, follow=None):
     """One trigger pull's round from `shooter` at `target`. Accuracy decides whether it hits;
     misses land somewhere nearby. mult scales damage (garrison bonus); origin overrides where
     the shot starts (a bunker's firing slit); wid fires another weapon the shooter carries (an
-    underbarrel launcher) with that weapon's own numbers."""
+    underbarrel launcher) with that weapon's own numbers. follow = True/False for the later
+    rounds of a volley: they only show, hitting (or missing) as the first round did.
+    Returns whether the round hit."""
     w = weapon(wid or shooter.weapon)
+    if follow is not None:
+        _fire_bullet(game, shooter, target, w, mult, origin or shooter.muzzle_pos(), follow,
+                     None if follow else _miss_offset(game.rng, shooter.accuracy), show=True)
+        return follow
     if wid:
         mult *= w["damage"] / max(0.01, shooter.damage)
     accuracy = (w["accuracy"] if wid else shooter.accuracy) * (PRONE_ACCURACY if shooter.suppressed else 1.0)
     if target.is_unit and target.suppressed:
         accuracy *= PRONE_TARGET_HIT   # a soldier hugging the dirt is a small target
     rng = game.rng
-    hit = rng.random() < accuracy
-    miss = None
-    if not hit:
-        spread = 6 + (1 - accuracy) * 30
-        a = rng.uniform(0, math.tau)
-        miss = (math.cos(a) * spread, math.sin(a) * spread * 0.6)
+    hit = w["sure"] or rng.random() < accuracy
+    miss = None if hit else _miss_offset(rng, accuracy)
+    if hit and w["spread"] and w["splash"]:
+        # A spreading burst: lobbed rounds land round the target, close enough that their
+        # blast still catches it.
+        a, d = rng.uniform(0, math.tau), rng.uniform(0.3, 1.0) * w["spread"]
+        miss = (math.cos(a) * d, math.sin(a) * d * 0.6)
     start = origin or shooter.muzzle_pos()
     if w["projectile"] is None:
         _fire_bullet(game, shooter, target, w, mult, start, hit, miss)
     else:
         game.projectiles.append(Projectile(shooter, target, shooter.damage * mult, w, start, miss,
                                            w["vs_vehicle"] if wid else None))
+    return hit
 
 
-def _fire_bullet(game, shooter, target, w, mult, start, hit, miss):
+def _miss_offset(rng, accuracy):
+    spread = 6 + (1 - accuracy) * 30
+    a = rng.uniform(0, math.tau)
+    return math.cos(a) * spread, math.sin(a) * spread * 0.6
+
+
+VOLLEY_SCATTER = 5.0   # px a volley's hits spread over the target's body
+
+
+def _fire_bullet(game, shooter, target, w, mult, start, hit, miss, show=False):
+    """A bullet's tracer, pin and damage; show=True draws only the tracer (a volley's later rounds)."""
     rng = game.rng
     tx, ty = target.x, target.y - 3
     dx, dy = tx - start[0], ty - start[1]
     dist = max(1.0, math.hypot(dx, dy))
     ux, uy = dx / dist, dy / dist
     if hit:
-        end = (tx + rng.uniform(-HIT_SCATTER, HIT_SCATTER), ty + rng.uniform(-HIT_SCATTER, HIT_SCATTER))
+        sc = VOLLEY_SCATTER if w["volley"] else HIT_SCATTER
+        end = (tx + rng.uniform(-sc, sc), ty + rng.uniform(-sc, sc) * 0.8)
     else:
         # Off to one side of the line, and carrying on past the target.
         side = rng.uniform(-1, 1) * dist * SPRAY_CONE * (2.4 - w["accuracy"] * 1.4) + rng.choice((-1, 1)) * 4
@@ -235,24 +266,26 @@ def _fire_bullet(game, shooter, target, w, mult, start, hit, miss):
         end = (tx + miss[0] * 0.5 - uy * side + ux * on, ty + miss[1] * 0.5 + ux * side * 0.6 + uy * on)
         game.particles.append([end[0], end[1], 0, -15, 0.25, (200, 176, 130), 1.0])
     game.tracers.append([start[0], start[1], end[0], end[1], 0.0, rng.random()])
+    if show:
+        return
     if w["pin_per_round"] and target.is_unit:
         # Rounds snapping past keep heads down whether or not they hit.
         target.suppress(SUPPRESS_PER_SHOT + shooter.damage, (shooter.x, shooter.y))
     if hit:
         amount = shooter.damage * mult * (shooter.vs_vehicle if target.is_vehicle else 1.0)
-        _hit(game, target, amount, shooter, w["type"])
+        _hit(game, target, amount, shooter, w["type"], w["vs"])
 
 
-def splash(game, x, y, radius, damage, vs_vehicle, team, source, wtype="explosive"):
+def splash(game, x, y, radius, damage, vs_vehicle, team, source, wtype="explosive", vs=None):
     """Area damage: full at the centre, half at the edge, enemies only."""
     for u in list(game.units):
         d = math.hypot(u.x - x, u.y - y) - u.radius
         if u.team != team and u.alive and d <= radius:
             f = 1 - 0.5 * max(0.0, d) / radius
-            _hit(game, u, damage * f * (vs_vehicle if u.is_vehicle else 1.0), source, wtype)
+            _hit(game, u, damage * f * (vs_vehicle if u.is_vehicle else 1.0), source, wtype, vs)
     for b in list(game.buildings):
         if b.team != team and b.alive and dist_point_rect(x, y, b.rect()) <= radius:
-            _hit(game, b, damage, source, wtype)
+            _hit(game, b, damage, source, wtype, vs)
 
 
 def pin_area(game, x, y, radius, amount):
@@ -323,9 +356,11 @@ class Projectile:
         t = self.target
         w = self.weapon
         if self.splash:
-            splash(game, x, y, self.splash, self.damage, self.vs_vehicle, self.team, self.source, w["type"])
+            splash(game, x, y, self.splash, self.damage, self.vs_vehicle, self.team, self.source, w["type"],
+                   w["vs"])
         elif not self.locked and t.alive:
-            _hit(game, t, self.damage * (self.vs_vehicle if t.is_vehicle else 1.0), self.source, w["type"])
+            _hit(game, t, self.damage * (self.vs_vehicle if t.is_vehicle else 1.0), self.source, w["type"],
+                 w["vs"])
         if w["blast_pin"]:   # explosives pin down infantry around the blast
             pin_area(game, x, y, max(w["blast_radius"], self.splash * 1.5), w["blast_pin"])
         game.boom(x, y - 2, self.boom)

@@ -2,6 +2,45 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.15.0 "Hold the Line" (2026-10-27)
+
+Deploy orders and a traversing gun house for the 155mm, sharper aim, new rifleman weapons,
+spreading bursts, and a scrolling design screen.
+
+### Added
+
+- **Deploy (Q) and Pack up (E) buttons for the 155mm tank.** Deployed on your order, it digs in
+  where it stands and holds that ground: it fires on anything in range and doesn't pack up to
+  chase targets that move off. Pack up gets it ready to drive. Moving it still packs up on its own.
+- **The 155mm's gun house turns once dug in.** It no longer has to pack up and turn the hull to
+  fire outside a narrow arc; when packing up, the gun house swings back to the front first.
+- **Sniper rifle** for the Rifleman's Light weapon tier (in place of the pistol): long range and
+  slow, 1.5× damage to soldiers, almost nothing against vehicles and buildings. Weapons can now
+  carry their own damage multipliers per kind of target.
+- **The sidebar picture shows the selected building** in detail (with its construction progress if
+  it's still going up). Click it to jump to that building. With no building selected it shows
+  the Command Center, as before.
+- **The design screen scrolls**, so the Barracks' four units all fit: mouse wheel, drag the bar,
+  or click the track.
+
+### Changed
+
+- **Units point at what they're shooting.** Models are drawn under a tilted camera, so a unit
+  facing a diagonal target looked turned towards the east-west line. Unit facings are now
+  converted to the angle that looks right on screen. A turret is also rounded to the nearest
+  drawn angle on its own bearing, so its rounding error no longer adds to the hull's.
+- **Rifle (Rifleman, Medium):** fires 5-round bursts that fan out over the target. The burst
+  counts as one shot (one hit roll, 8 damage, every 1.2s), so the spread never turns a hit into
+  a miss.
+- **UAG-40 (Jeep, Medium):** 3-round bursts that land spread round the target (close enough for
+  the blast to still catch it), with a 6-second reload after every 5 bursts.
+- **6-round grenade launcher (Anti-Armor, Medium):** fires its 6 rounds more slowly (0.3s
+  apart), with a slightly longer reload.
+- **Javelin:** never misses, and always tracks its target as it moves.
+- **Light tank (Bushmaster) turret** is a quarter smaller.
+- **Keys:** Q, E and R are kept for unit abilities. Attack is now **T** (was Q) and the
+  engineer's Repair is now **F** (was R).
+
 ## 0.14.0 "Dig In" (2026-10-27)
 
 A new anti-armour soldier, a tank gun that has to dig in before it fires, bullets that spray,

@@ -143,18 +143,30 @@ class HUD:
         """A full-resolution picture centred on UI point (cx, cy)."""
         self.layer.image_center(img, cx, cy, clip)
 
+    @staticmethod
+    def portrait_building(ctrl):
+        """The building the sidebar portrait shows: the one selected, if a single building is."""
+        sel = ctrl.selection
+        return sel[0] if len(sel) == 1 and sel[0].is_building else None
+
     def draw_sidebar(self, surf, ctrl, items):
         g = self.game
         surf.blit(self.sidebar, (SB_X, 0))
         mouse = ctrl.mouse
-        # Command Center portrait: click to jump there.
+        # Portrait: a detailed picture of the selected building, or the Command Center when no
+        # building is selected. Click to jump there.
         r = self.portrait_rect
-        has_cc = any(b.team == PLAYER and b.kind == "command" for b in g.buildings)
+        shown = self.portrait_building(ctrl)
         bevel(surf, r, raised=not r.collidepoint(mouse), fill=(176, 146, 98))
-        img = self.sp.building_portrait("command", PLAYER, (r.w - 10) * RES)
+        if shown is not None:
+            img = self.sp.building_portrait(shown.kind, shown.team, (r.w - 10) * RES, (r.h - 6) * RES)
+        else:
+            img = self.sp.building_portrait("command", PLAYER, (r.w - 10) * RES)
         self.picture(img, r.centerx, r.centery + 2, clip=r.inflate(-2, -2))
-        if not has_cc:
+        if shown is None and not any(b.team == PLAYER and b.kind == "command" for b in g.buildings):
             self.layer.fill(r.inflate(-2, -2), (0, 0, 0, 150))
+        elif shown is not None and not shown.complete:
+            hp_bar(surf, r.x + 3, r.bottom - 5, r.w - 6, shown.progress)
         # Menu title: the selected factory, or the Command Center by default.
         title = ctrl.menu_title()
         draw_text(surf, self.clip_text(title, SIDEBAR_W - 8), SB_X + 4, r.bottom + 4, YELLOW)

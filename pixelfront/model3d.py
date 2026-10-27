@@ -360,7 +360,7 @@ def _hold(gun, act, shield=False):
     gun is None)."""
     if gun == "pistol":
         hold = {-1: (88, 0) if act == "fire" else (30, 45), 1: (0, 15)}
-    elif gun in ("rifle", "rifle_ugl"):
+    elif gun in ("rifle", "rifle_ugl", "sniper"):
         hold = {-1: (30, 70), 1: (45, 50)} if act != "fire" else {-1: (40, 70), 1: (55, 45)}
     elif gun == "m60":                    # at the hip
         hold = {-1: (10, 70), 1: (30, 60)}
@@ -722,6 +722,23 @@ def _weapon(W, kind, gun, act, recoil):
             add((5.5 + r, y, z - 1.5), (1.2, 0.9, 1.4), GUN)                               # breech / trigger
             add((5.2 + r, y, z - 2.4), (0.6, 0.6, 0.8), GUN_L)                             # trigger guard
         return (11.3 + r, y, z + 0.15)
+    if gun == "sniper":                                # bolt-action sniper rifle with a big scope
+        z, y = (13.4 if aim else 12.6), -1.6
+        add((0.2 + r, y, z - 0.5), (3.0, 1.0, 2.0), BROWN)                                 # stock
+        add((-1.35 + r, y, z - 0.5), (0.3, 1.1, 2.2), (36, 36, 40))                        # butt pad
+        add((0.8 + r, y, z + 0.75), (1.6, 0.8, 0.5), BROWN_D)                              # cheek rest
+        add((3.4 + r, y, z), (3.6, 1.1, 1.4), GUN)                                         # action
+        add((4.4 + r, y + 0.75, z + 0.3), (0.3, 0.6, 0.3), GUN_L)                          # bolt handle
+        cyl((3.6 + r, y, z + 1.6), 0.6, 4.6, "x", (34, 36, 40), n=8)                      # scope tube
+        cyl((6.0 + r, y, z + 1.6), 0.8, 0.8, "x", (34, 36, 40), n=8)                      # objective bell
+        add((6.42 + r, y, z + 1.6), (0.12, 0.9, 0.9), CYAN, glow=True)                     # its lens
+        add((3.0 + r, y, z - 1.0), (0.7, 0.85, 1.2), BROWN, tilt(14, 3.0 + r, y, z - 0.5))  # grip
+        cyl((7.4 + r, y, z + 0.1), 0.55, 3.0, "x", BROWN, n=8)                            # fore-end
+        cyl((11.0 + r, y, z + 0.1), 0.28, 5.2, "x", GUN, n=8)                             # long barrel
+        cyl((13.75 + r, y, z + 0.1), 0.45, 0.6, "x", GUN_L, n=8)                          # muzzle brake
+        for s in (0.45, -0.45):                                                             # folded bipod
+            add((8.6 + r, y + s, z - 1.0), (0.3, 0.3, 1.8), GUN, (("roll", s * 30, (8.6 + r, y + s, z - 0.2)),))
+        return (14.1 + r, y, z + 0.1)
     if gun == "pistol":
         z, y = (14.6 if aim else 11.6), -3.7
         x = 7.6 if aim else 4.4
@@ -998,15 +1015,21 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_ex
                 add((-15.0, s * 3.2, 9.6), (1.4, 1.6, 1.2), FLAME, glow=True)
 
     if gun == "howitzer_155":   # an artillery piece instead of a turret
-        muzzle = _artillery(B, tc, hull, recoil, flash, wreck, deploy, elev_extra)
+        muzzle = _artillery(B, tc, hull, recoil, flash, wreck, deploy, elev_extra, turret)
         return B, muzzle, gear
 
     # Turret group (can turn independently of the hull).
     tr = [("yaw", turret, TANK_PIVOT)]
     if wreck:
         tr.append(("roll", 8, (-1, 0, 12)))
-    tadd = lambda pos, size, col, rot=(), glow=False: B.append(Box(pos, size, col, tuple(rot) + tuple(tr), glow))
-    tcyl = lambda pos, r, length, col, rot=(), n=10: B.append(Cyl(pos, r, length, "x", col, tuple(rot) + tuple(tr), n=n))
+    # The Bushmaster's turret is a smaller one: everything in it shrinks towards the turret ring.
+    ts = TANK_LIGHT_TURRET if gun == "bushmaster" else 1.0
+    sc = lambda p: (-1 + (p[0] + 1) * ts, p[1] * ts, 11.4 + (p[2] - 11.4) * ts)
+    srot = lambda rot: tuple((ax, deg, sc(pv)) for ax, deg, pv in rot) + tuple(tr)
+    tadd = lambda pos, size, col, rot=(), glow=False: B.append(
+        Box(sc(pos), tuple(v * ts for v in size), col, srot(rot), glow))
+    tcyl = lambda pos, r, length, col, rot=(), n=10: B.append(
+        Cyl(sc(pos), r * ts, length * ts, "x", col, srot(rot), n=n))
     T = tc["T"]
     tadd((-1, 0, 13.0), (12, 10, 3.6), T)
     tadd((-1.4, 0, 15.2), (9.6, 8, 0.8), T)
@@ -1065,7 +1088,10 @@ def _tank(light, lo, phase, recoil, flash, moving, wreck, turret, steer, elev_ex
         size = 2.0 if gun == "bushmaster" else 3.2
         tadd((muzzle[0] + fx * size / 2, 0, muzzle[2] + fz * size / 2), (size, size, size), FLASH_Y, glow=True)
         tadd((muzzle[0] + fx * 0.8, 0, muzzle[2] + fz * 0.8), (size * 0.6,) * 3, FLASH_W, glow=True)
-    return B, _rotate(muzzle, "yaw", turret, TANK_PIVOT), gear
+    return B, _rotate(sc(muzzle), "yaw", turret, TANK_PIVOT), gear
+
+
+TANK_LIGHT_TURRET = 0.75   # size of the Bushmaster tank's turret next to the 120mm's
 
 
 def _phase(d, a, b):
@@ -1081,10 +1107,14 @@ SPADE_ARM = 7.4                 # hinge to blade
 SPADE_DUG, SPADE_UP = -35, -180  # arm angle from hanging straight down: dug in / folded up
 
 
-def _artillery(B, tc, hull, recoil, flash, wreck, d, elev_extra):
+ART_HOUSE_PIVOT = (-2.0, 0, 0)   # where the gun house turns on the hull once dug in
+
+
+def _artillery(B, tc, hull, recoil, flash, wreck, d, elev_extra, turret=0.0):
     """The 155mm self-propelled gun: an open-topped gun house with a front shield, the barrel
     resting on a travel lock. Deploying (d 0..1) lowers the rear spades and side jacks, folds the
-    travel lock away and raises the barrel. Returns the muzzle point."""
+    travel lock away and raises the barrel; dug in, the gun house turns `turret` degrees on the
+    hull. Returns the muzzle point."""
     add, cyl, _ = _adders(B)
     T, Td = tc["T"], tc["Td"]
     dig, lock, lift = _phase(d, 0.0, 0.5), _phase(d, 0.3, 0.6), _phase(d, 0.5, 1.0)
@@ -1113,6 +1143,8 @@ def _artillery(B, tc, hull, recoil, flash, wreck, d, elev_extra):
     add((12.0, 0, 15.0), (1.2, 3.4, 0.7), GUN, tl)                                    # the cradle
 
     # Gun house: open-topped armoured walls in the team colour, a sloped shield at the front.
+    add((-2.0, 0, 10.9), (17.0, 10.6, 0.3), shade(hull, 0.6))                         # turntable well
+    house = len(B)
     add((-2.0, 0, 11.0), (17.0, 10.6, 0.5), shade(hull, 0.8))                         # floor
     for s in (1, -1):
         add((-2.0, s * 5.2, 13.4), (17.0, 0.6, 4.4), T)                              # side walls
@@ -1163,6 +1195,11 @@ def _artillery(B, tc, hull, recoil, flash, wreck, d, elev_extra):
         add((mx + fx * 0.8, 0, mz + fz * 0.8), (2.6, 2.6, 2.6), FLASH_W, glow=True)
         for s in (1, -1):   # flame jets out of the brake's side ports
             add((mx - fx * 2.0, s * 3.2, mz - fz * 2.0), (2.0, 2.4, 1.6), FLASH_Y, glow=True)
+    if turret:
+        yaw = (("yaw", turret, ART_HOUSE_PIVOT),)
+        for b in B[house:]:
+            b.rot = tuple(b.rot) + yaw
+        muzzle = _rotate(muzzle, "yaw", turret, ART_HOUSE_PIVOT)
     return muzzle
 
 

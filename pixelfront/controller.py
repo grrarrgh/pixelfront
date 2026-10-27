@@ -119,14 +119,20 @@ class Controller:
             return []
         units = [e for e in sel if e.is_unit]
         if units:
+            # Q, E and R are kept for unit abilities (the 155mm's Deploy / Pack up).
             cmds = [dict(id="move", key="m", icon="move", title="Move",
                          desc="Park next to a derrick to capture it."),
                     dict(id="stop", key="x", icon="stop", title="Stop")]
             if any(u.armed for u in units):
-                cmds.append(dict(id="attack", key="q", icon="attack", title="Attack",
+                cmds.append(dict(id="attack", key="t", icon="attack", title="Attack",
                                  desc="Click an enemy, or ground to attack-move."))
+            if any(u.deploy_time for u in units):
+                cmds.append(dict(id="deploy", key="q", icon="deploy", title="Deploy",
+                                 desc="Dig in here: the gun turns to fire on anything in range."))
+                cmds.append(dict(id="pack", key="e", icon="pack", title="Pack up",
+                                 desc="Spades up and barrel down, ready to drive."))
             if all(u.kind == "engineer" for u in units):
-                cmds.append(dict(id="repair", key="r", icon="repair", title="Repair",
+                cmds.append(dict(id="repair", key="f", icon="repair", title="Repair",
                                  desc="Fix a building or vehicle."))
             return cmds
         b = sel[0]
@@ -213,6 +219,12 @@ class Controller:
         elif cid == "stop":
             for u in self.own_units():
                 u.stop(g)
+        elif cid == "deploy":
+            for u in self.own_units():
+                u.order_deploy(g)
+        elif cid == "pack":
+            for u in self.own_units():
+                u.order_pack(g)
         elif cid == "design":
             return "design"
         elif cid.startswith("build:"):
@@ -295,7 +307,11 @@ class Controller:
             return None
         if self.in_sidebar(pos):
             if self.hud.portrait_rect.collidepoint(pos):
-                self.jump_to_command_center()
+                shown = self.hud.portrait_building(self)
+                if shown is not None:
+                    self.center_on(shown.x, shown.y)
+                else:
+                    self.jump_to_command_center()
                 return None
             items = self.build_menu()
             i = self.hud.menu_item_at(pos, len(items))

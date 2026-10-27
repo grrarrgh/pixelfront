@@ -2,7 +2,7 @@
 import logging
 import math
 
-from .config import TILE, BUILDINGS, NEUTRAL, POINT_SIGHT, BURST_GAP
+from .config import TILE, BUILDINGS, NEUTRAL, POINT_SIGHT
 
 # What manning a structure does for its garrison unless BUILDINGS[kind]["garrison"] says otherwise.
 GARRISON_DEFAULTS = dict(reload=1.0, damage=1.0, range=1.0, heal=0.0, sight=0)
@@ -157,16 +157,9 @@ class Building(Structure):
                 continue
             u.face(t.x, t.y)
             if u.burst_left > 0:
-                u.burst_timer -= dt
-                if u.burst_timer <= 0:
-                    u.burst_left -= 1
-                    u.burst_timer = BURST_GAP
-                    game.attack(u, t, gar["damage"], self.firing_port(t))
+                u.burst_step(game, t, dt, gar["damage"], self.firing_port(t))
             elif u.cooldown <= 0:
-                u.cooldown = u.attack_time * gar["reload"]
-                u.lunge = 0.12
-                u.burst_left, u.burst_timer = u.burst - 1, BURST_GAP
-                game.attack(u, t, gar["damage"], self.firing_port(t))
+                u.pull_trigger(game, t, gar["damage"], self.firing_port(t), gar["reload"])
 
     def firing_port(self, target):
         """Where shots leave the structure: the slit (or parapet) facing the target."""

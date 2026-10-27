@@ -105,6 +105,22 @@ def unit_anim(u):
     return "idle", int((u.idle_t + u.id * 0.37) * 2.5) % 4
 
 
+def view_facing(angle):
+    """The model facing that points along world bearing `angle` (degrees) on screen. Models are
+    drawn under a tilted camera that squashes their north-south axis, while the map is drawn
+    straight down; without this, a unit aiming at a diagonal target would look turned towards
+    the east-west line instead."""
+    a = math.radians(angle)
+    return math.degrees(math.atan2(math.sin(a), math.cos(a) * m3.SIN_E)) % 360
+
+
+def view_angles(facing, turret=0.0):
+    """(hull facing, turret relative to the hull) to draw a unit facing world bearing `facing`
+    with its turret `turret` degrees round from that (see view_facing)."""
+    hull = view_facing(facing)
+    return hull, (view_facing(facing + turret) - hull) if turret else 0.0
+
+
 def death_frame(age):
     for i, t in enumerate(DEATH_STEPS):
         if age < t:
@@ -168,7 +184,8 @@ class UnitSprite:
         i %= self.frames[anim]
         fi = self.facing_index(angle)
         vehicle = self.cls == "vehicle"
-        ti = self.facing_index(turret) if vehicle else 0
+        # The turret is rounded by its own bearing, so its error doesn't add to the hull's.
+        ti = (self.facing_index(angle + turret) - fi) % self.facings if vehicle else 0
         si = (0 if abs(steer) < STEER_MAX / 3 else (1 if steer > 0 else -1)) if vehicle else 0
         key = (anim, i, fi, ti, si)
         got = self._cache.get(key)
@@ -201,7 +218,9 @@ def muzzle_offset(kind, loadout, angle, prone=False, turret=0.0, kneel=False, de
     vehicle = UNITS[kind]["cls"] == "vehicle"
     n = FACINGS["vehicle" if vehicle else "infantry"]
     step = 360 / n
-    tq = round(turret / step) * step if vehicle else 0.0
+    angle, turret = view_angles(angle, turret)
+    aq = round(angle / step) * step
+    tq = (round((angle + turret) / step) * step - aq) % 360 if vehicle else 0.0
     key = (kind, tuple(sorted(loadout.items())), prone, kneel, tq, deployed)
     point = _muzzles.get(key)
     if point is None:
@@ -214,7 +233,7 @@ def muzzle_offset(kind, loadout, angle, prone=False, turret=0.0, kneel=False, de
             anim = "pfire" if prone else "kfire" if kneel else "fire"
             _, mz, _, _ = m3.soldier(kind, (0, 0, 0), loadout, anim, 0)
         point = _muzzles[key] = mz or (0, 0, 10)
-    return m3.project(point, round(angle / step) * step, 1.0 if vehicle else m3.INF_SCALE)
+    return m3.project(point, aq, 1.0 if vehicle else m3.INF_SCALE)
 
 
 # ---- buildings -------------------------------------------------------------
@@ -300,6 +319,36 @@ def icon_cancel():
     pygame.draw.line(s, K, (19, 5), (5, 19), 6)
     pygame.draw.line(s, (220, 60, 50), (6, 6), (18, 18), 3)
     pygame.draw.line(s, (220, 60, 50), (18, 6), (6, 18), 3)
+    return s
+
+
+def _gun_icon(s, raised):
+    """A gun on a low hull: barrel up (dug in) or down on its travel lock."""
+    pygame.draw.rect(s, K, (3, 13, 16, 6))
+    pygame.draw.rect(s, (150, 160, 110), (4, 14, 14, 4))
+    end = (19, 4) if raised else (21, 11)
+    pygame.draw.line(s, K, (9, 13), end, 4)
+    pygame.draw.line(s, (200, 204, 210), (9, 13), end, 2)
+
+
+def icon_deploy():
+    """Gun raised, spades driven into the ground."""
+    s = _icon()
+    _gun_icon(s, True)
+    pygame.draw.line(s, K, (2, 21), (22, 21), 1)
+    for x in (4, 8):
+        pygame.draw.line(s, K, (x, 18), (x - 2, 23), 3)
+        pygame.draw.line(s, (240, 200, 80), (x, 18), (x - 2, 22), 1)
+    return s
+
+
+def icon_pack():
+    """Gun lowered, with an arrow: packing up to move."""
+    s = _icon()
+    _gun_icon(s, False)
+    pts = [(3, 6), (8, 2), (13, 6), (10, 6), (10, 10), (6, 10), (6, 6)]
+    pygame.draw.polygon(s, (96, 206, 96), pts)
+    pygame.draw.polygon(s, K, pts, 1)
     return s
 
 
@@ -625,7 +674,8 @@ class Sprites:
         self.derrick_frames = [m3.render(b, m3.BUILD_FACING, ss=2, texture=0.06, bounds=bounds, scale=RES,
                                          edges=BLD_EDGES) for b in models]
         self.icons = {"move": icon_move(), "stop": icon_stop(), "attack": icon_attack(),
-                      "repair": icon_repair(), "design": icon_design(), "cancel": icon_cancel()}
+                      "repair": icon_repair(), "design": icon_design(), "cancel": icon_cancel(),
+                      "deploy": icon_deploy(), "pack": icon_pack()}
         self.cursor = art_surface(CURSOR_ART, BASE_PAL)
         self._portraits = {}
         self._icons_hi = {}
@@ -688,14 +738,17 @@ class Sprites:
             got = self._flashes[key] = silhouette(self.building(kind, team)[0])
         return got
 
-    def building_portrait(self, kind, team, width):
+    def building_portrait(self, kind, team, width, height=None):
         """A building re-rendered at a larger scale (real detail, not an upscale) to fit `width`
-        screen pixels."""
-        key = ("hq", kind, team, width)
+        (and `height`, if given) screen pixels."""
+        key = ("hq", kind, team, width, height)
         p = self._portraits.get(key)
         if p is None:
-            base = self.building(kind, team)[0].get_width() / RES   # its width at one pixel per unit
-            img = render_building(kind, team, scale=width / base)[0]
+            img = self.building(kind, team)[0]
+            scale = width / (img.get_width() / RES)   # its width at one pixel per unit
+            if height:
+                scale = min(scale, height / (img.get_height() / RES))
+            img = render_building(kind, team, scale=scale)[0]
             p = self._portraits[key] = img
         return p
 

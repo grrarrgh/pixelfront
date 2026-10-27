@@ -682,9 +682,10 @@ class Game:
 
     # ---- combat -----------------------------------------------------------
 
-    def attack(self, attacker, target, mult=1.0, origin=None, wid=None):
-        """Fire one round of the attacker's weapon, or of another it carries (see weapons.fire)."""
-        weapons.fire(self, attacker, target, mult, origin, wid)
+    def attack(self, attacker, target, mult=1.0, origin=None, wid=None, follow=None):
+        """Fire one round of the attacker's weapon, or of another it carries (see weapons.fire).
+        Returns whether it hit."""
+        return weapons.fire(self, attacker, target, mult, origin, wid, follow)
 
     def enter(self, unit, bunker):
         """A soldier climbs into a bunker: off the map until unloaded or the bunker falls."""
@@ -766,7 +767,7 @@ class Game:
             # The renderer animates these: infantry topple and fade, vehicles blow up and smoulder.
             death = dict(x=e.x, y=e.y, t=self.time, unit=e.kind, team=e.team, loadout=e.loadout,
                          facing=e.facing, r=e.radius, prone=e.suppressed,
-                         turret=e.turret - e.facing if e.has_turret else 0.0)
+                         turret=e.turret_rel)
             if e.is_vehicle:
                 self.decals.append(dict(death, kind="wreck", life=30))
                 self.puff(e.x, e.y - 4, (255, 220, 120), 10, 70)

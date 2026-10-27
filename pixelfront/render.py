@@ -9,7 +9,7 @@ from .config import TILE, VIEW_W, VIEW_H, PLAYER, NEUTRAL, BUILDINGS, TEAM_COLOR
 from . import model3d as m3
 from .units import UNITS
 from .game import BOOM_TIME as SHOT_BOOM_TIME
-from .sprites import K, render_terrain, unit_anim, death_frame, DEATH_STEPS, silhouette, shade
+from .sprites import K, render_terrain, unit_anim, death_frame, DEATH_STEPS, silhouette, shade, view_angles
 from .entities import PING_TIME
 from .controller import MARKER_TIME
 
@@ -173,19 +173,20 @@ def draw_death(surf, sprites, d, age, x, y, k=RES):
     """Draw a death decal (infantry topple / vehicle wreck) at screen (x, y) `age` seconds
     after the kill."""
     spr = sprites.unit(d["unit"], d["team"], d["loadout"])
+    facing, turret = view_angles(d["facing"], d.get("turret", 0.0))
     fade = min(1.0, (d["life"] - age) / FADE_TIME)
     if d["kind"] == "fall":
         if d.get("prone"):
-            img, (ox, oy) = spr.frame("prone", 0, d["facing"])
+            img, (ox, oy) = spr.frame("prone", 0, facing)
         else:
-            img, (ox, oy) = spr.frame("die", death_frame(age), d["facing"])
+            img, (ox, oy) = spr.frame("die", death_frame(age), facing)
         if fade < 1 or age >= DEATH_STEPS[-1]:
             img = img.copy()
             img.fill((150, 140, 130, 255), special_flags=pygame.BLEND_RGBA_MULT)
             img.set_alpha(int(255 * max(0.0, fade)))
         surf.blit(img, (x - ox, y - oy))
         return
-    img, (ox, oy) = spr.frame("die", 0, d["facing"], d.get("turret", 0.0))
+    img, (ox, oy) = spr.frame("die", 0, facing, turret)
     if fade < 1:
         img = img.copy()
         img.set_alpha(int(255 * max(0.0, fade)))
@@ -333,13 +334,13 @@ class Renderer:
     def draw_unit(self, view, u, at):
         spr = self.sp.unit(u.kind, u.team, u.loadout)
         anim, i = unit_anim(u)
-        turret = u.turret - u.facing if u.has_turret else 0.0
+        facing, turret = view_angles(u.facing, u.turret_rel)
         x, y = at(u.x, u.y)
         draw_shadow(view, x, y, u.radius, u.is_infantry and u.suppressed)
-        img, (ox, oy) = spr.frame(anim, i, u.facing, turret, u.steer)
+        img, (ox, oy) = spr.frame(anim, i, facing, turret, u.steer)
         view.blit(img, (x - ox, y - oy))
         if u.flash > 0:
-            fl, _ = spr.flash(anim, i, u.facing, turret, u.steer)
+            fl, _ = spr.flash(anim, i, facing, turret, u.steer)
             view.blit(fl, (x - ox, y - oy))
 
     def draw_decal(self, view, d, at):
