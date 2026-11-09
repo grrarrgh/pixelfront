@@ -775,4 +775,56 @@ class Sprites:
         return p
 
     def window_icon(self):
-        return fit(self.unit("tank", PLAYER).image, 48)
+        return app_icon(64, self)
+
+
+# ---- app icon ----------------------------------------------------------------
+
+ICON_N = 128              # the icon is drawn on a 128x128 canvas and scaled to each size
+ICON_R = 18               # corner radius of the tile
+ICON_TANK_FACING = -30    # heading up and to the right
+SHADOW_C = (60, 40, 20)
+
+
+def _icon_canvas(sprites, detailed):
+    """The game's icon: a framed tile of desert sand with the player's tank on it and, when
+    `detailed`, an oil derrick behind it. Without detail (for 32px and below) the tank is
+    drawn bigger and alone so it still reads."""
+    n = ICON_N
+    rng = random.Random(7)
+    base, dark, light = SAND_C
+    ground = pygame.Surface((n, n))
+    ground.fill(base)
+    for _ in range(240):
+        ground.set_at((rng.randrange(n), rng.randrange(n)), rng.choice((dark, dark, light)))
+    for ry in range(12, n, 13):                     # dune ripples
+        ox = rng.randrange(-30, 30)
+        pygame.draw.line(ground, dark, (30 + ox, ry), (70 + ox, ry + 3), 2)
+    canvas = ground.convert_alpha()
+    mask = pygame.Surface((n, n), pygame.SRCALPHA)
+    pygame.draw.rect(mask, (255, 255, 255, 255), (0, 0, n, n), border_radius=ICON_R)
+    canvas.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+
+    if detailed:
+        canvas.blit(sprites.derrick(0.3)[0], (12, 8))
+    model, _ = m3.tank(TEAM_COLORS[PLAYER][0], default_loadout("tank"))
+    tank = m3.render(model, view_facing(ICON_TANK_FACING), scale=3.0 if detailed else 3.6,
+                     edges=VEH_EDGES)[0]
+    tw, th = tank.get_size()
+    tx, ty = (n - tw) // 2 + (8 if detailed else 0), n - th - (12 if detailed else (n - th) // 2)
+    shadow = silhouette(tank, SHADOW_C)
+    shadow.set_alpha(110)
+    canvas.blit(shadow, (tx + 6, ty + 5))
+    canvas.blit(tank, (tx, ty))
+
+    pygame.draw.rect(canvas, K, (0, 0, n, n), 4, border_radius=ICON_R)
+    pygame.draw.rect(canvas, LIP, (4, 4, n - 8, n - 8), 2, border_radius=ICON_R - 4)
+    return canvas
+
+
+def app_icon(size, sprites=None):
+    """The game's icon at size x size pixels (window icon and, via tools/make_icon.py, the exe's)."""
+    canvas = _icon_canvas(sprites or Sprites(), detailed=size > 32)
+    if size % ICON_N == 0:
+        return pygame.transform.scale(canvas, (size, size))
+    return pygame.transform.smoothscale(canvas, (size, size))

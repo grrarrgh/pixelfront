@@ -2,6 +2,20 @@
 
 All notable changes to Pixelfront are listed here, newest first. Each entry has a version number and a name.
 
+## 0.16.0 "Colours" (2026-11-09)
+
+Pixelfront has its own icon.
+
+### Added
+
+- **App icon.** A framed tile of desert sand with the blue player tank heading out, gun raised,
+  past an oil derrick, drawn by the game's own sprite code (the tank model at 1.5x the in-game
+  scale). Sizes of 32px and below drop the derrick and let the tank fill the tile so it still
+  reads. It's the window/taskbar icon (64px, drawn at startup) and the exe's icon.
+- **`tools/make_icon.py`** writes `pixelfront.ico` with 16, 24, 32, 48, 64, 128 and 256px images
+  (embedded PNGs, no extra dependencies). `build.ps1` runs it before PyInstaller and passes
+  `--icon pixelfront.ico`.
+
 ## 0.15.1 "Mirror Image" (2026-10-27)
 
 Turrets aim where they're drawn, and maps can be rebuilt exactly outside Python.

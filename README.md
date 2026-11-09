@@ -17,7 +17,8 @@ python main.py
 .\build.ps1
 ```
 
-This produces a single self-contained `dist\Pixelfront.exe`.
+This produces a single self-contained `dist\Pixelfront.exe`. It first redraws `pixelfront.ico` (the exe's
+icon) from the game's own art with `tools\make_icon.py`; the window icon is drawn the same way at startup.
 
 The game window shows 1280×720 pixels, scaled up to fit the screen (an exact 2× on 2560×1440).
 The world is drawn at that full resolution; the HUD is laid out on a 640×360 grid and doubled.
